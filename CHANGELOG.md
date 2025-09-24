@@ -1,6 +1,37 @@
 # Changelog
 
-## [Unreleased][unreleased]
+## [3.1.1][] - 2025-09-21
+
+- Fix TypeError: domain.enter is not a function
+- Remove node:repl from autoloaded dependencies
+- Remove node:sea from autoloaded dependencies
+
+## [3.1.0][] - 2025-09-20
+
+- Migrate from metatests to Node.js native test runner
+- Remove metatests dependency
+- Node.js engines now: >= 18.15
+- Add custom URL params (queries) support for bus
+- Implement custom headers support for bus
+- Load schemas before db and libs (fixes #1983)
+- Update all dependencies to latest versions
+- Update AUTHORS file with all contributors
+- Update README requirements with current versions
+
+## [3.0.18][] - 2025-06-06
+
+- Remove deprecated and invalid internal modules from loader
+- Update dependencies
+
+## [3.0.17][] - 2025-05-25
+
+- Add node.js 24 to CI
+- Update dependencies
+
+## [3.0.16][] - 2024-09-01
+
+- Update eslint to 9.x and prettier with configs
+- Add node.js 22 to CI
 
 ## [3.0.15][] - 2024-04-27
 
@@ -372,7 +403,11 @@ First generation of application server with following features
 - Connection drivers for database engines: MongoDB, PgSQL, Oracle, MySQL
 - Support GeoIP, health monitoring, task scheduling, server-side templating
 
-[unreleased]: https://github.com/metarhia/impress/compare/v3.0.15...HEAD
+[3.1.1]: https://github.com/metarhia/impress/compare/v3.1.0...v3.1.1
+[3.1.0]: https://github.com/metarhia/impress/compare/v3.0.18...v3.1.0
+[3.0.18]: https://github.com/metarhia/impress/compare/v3.0.17...v3.0.18
+[3.0.17]: https://github.com/metarhia/impress/compare/v3.0.16...v3.0.17
+[3.0.16]: https://github.com/metarhia/impress/compare/v3.0.15...v3.0.16
 [3.0.15]: https://github.com/metarhia/impress/compare/v3.0.14...v3.0.15
 [3.0.14]: https://github.com/metarhia/impress/compare/v3.0.13...v3.0.14
 [3.0.13]: https://github.com/metarhia/impress/compare/v3.0.12...v3.0.13

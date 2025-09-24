@@ -1,19 +1,14 @@
 name: Testing CI
-
 on: pull_request
-
 jobs:
   build:
     runs-on: ${{ matrix.os }}
-
     strategy:
       matrix:
         node:
           - 18
           - 20
-          - 21
           - 22
-          - 23
           - 24
         os:
           - ubuntu-latest
@@ -25,7 +20,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - uses: actions/cache@v3
+      - uses: actions/cache@v4
         with:
           path: ~/.npm
           key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
