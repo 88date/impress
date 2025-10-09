@@ -72,7 +72,8 @@
     "metaschema": "^2.2.2",
     "metautil": "^5.4.0",
     "metavm": "^1.4.5",
-    "metawatch": "^1.2.4"
+    "metawatch": "^1.2.4",
+    "postgres": "^3.4.7"
   },
   "devDependencies": {
     "@types/node": "^24.5.2",
