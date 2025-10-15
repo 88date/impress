@@ -1,6 +1,6 @@
 {
   "name": "impress",
-  "version": "3.0.46",
+  "version": "3.0.47",
   "author": "Timur Shemsedinov <timur.shemsedinov@gmail.com>",
   "description": "Enterprise application server for Node.js",
   "license": "MIT",
@@ -66,6 +66,7 @@
     "node": ">=18.15"
   },
   "dependencies": {
+    "dayjs": "^1.11.18",
     "metacom": "github:88date/metacom#v3.4.1",
     "metaconfiguration": "^3.0.3",
     "metalog": "^3.1.17",
