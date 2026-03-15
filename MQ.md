@@ -65,6 +65,30 @@ Folder = queue. File = job handler. File name = `job.name`.
 
 Job options merge priority: `defaultJobOptions` < job file options < `opts` at call site.
 
+### Job events (QueueEvents)
+
+Job files can optionally define `onCompleted` and `onFailed` handlers.
+These use BullMQ `QueueEvents` (Redis Pub/Sub) and work across processes/servers.
+The connection is created lazily — only if at least one job file in the folder has event handlers.
+
+```js
+// mq/push/welcome.js
+({
+  method: async (data, job) => {
+    await domain.notification.push.send(data.userId);
+    return { sent: true };
+  },
+
+  onCompleted: (result, job) => {
+    console.log(`Welcome push sent, job ${job.id}`);
+  },
+
+  onFailed: (reason, job) => {
+    console.log(`Welcome push failed: ${reason}`);
+  },
+});
+```
+
 ## API
 
 ### Add job
@@ -125,4 +149,4 @@ mq.push.worker   // Worker instance (null on server threads)
 
 ## Reserved file names
 
-`flow`, `queue`, `worker`, `add`, `getStatus` - cannot be used as job names.
+`flow`, `queue`, `worker`, `events`, `add`, `getStatus` - cannot be used as job names.
