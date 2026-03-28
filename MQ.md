@@ -33,7 +33,12 @@ Folder = queue. File = job handler. File name = `job.name`.
   },
 
   schedules: [
-    { name: 'cleanup', pattern: '0 3 * * *', data: {} },
+    {
+      name: 'cleanup',
+      pattern: '0 3 * * *',
+      tz: 'Europe/Moscow',
+      data: {},
+    },
     { name: 'healthCheck', every: 300000, data: {} },
   ],
 
@@ -119,10 +124,18 @@ await mq.push.flow({
 });
 ```
 
+For cron-based schedules in `.queue.js`, you can set `timezone`.
+The framework maps it to BullMQ's `tz` repeat option.
+
 ### Schedules (dynamic)
 
 ```js
 await mq.push.queue.upsertJobScheduler('newTask', { every: 60000 }, { data: {} });
+await mq.push.queue.upsertJobScheduler(
+  'dailyReport',
+  { pattern: '0 15 3 * * *', tz: 'Europe/Moscow' },
+  { data: {} },
+);
 await mq.push.queue.removeJobScheduler('newTask');
 await mq.push.queue.getJobSchedulers();
 ```
