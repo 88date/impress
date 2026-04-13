@@ -68,7 +68,7 @@
   "dependencies": {
     "bullmq": "^5.71.0",
     "dayjs": "^1.11.18",
-    "metacom": "github:88date/metacom#v3.4.1",
+    "metacom": "github:88date/metacom#v3.4.3",
     "metaconfiguration": "^3.0.3",
     "metalog": "^3.1.18",
     "metaschema": "^2.2.2",
