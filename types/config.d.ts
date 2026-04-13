@@ -47,6 +47,7 @@ export interface ServerConfig {
   cors?: {
     origin: string;
   };
+  secret: string;
 }
 
 export interface CacheConfig {

@@ -30,4 +30,5 @@
   cors: {
     origin: '?string',
   },
+  secret: '?string',
 });
