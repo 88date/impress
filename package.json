@@ -63,7 +63,7 @@
     "fix": "eslint . --fix && prettier --write \"**/*.js\" \"**/*.json\" \"**/*.md\" \"**/*.ts\""
   },
   "engines": {
-    "node": ">=18.15"
+    "node": ">=22.13"
   },
   "dependencies": {
     "bullmq": "^5.78.0",

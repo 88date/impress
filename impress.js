@@ -3,6 +3,7 @@
 process.title = 'impress';
 
 const fsp = require('node:fs').promises;
+const { stripTypeScriptTypes } = require('node:module');
 const { Worker } = require('node:worker_threads');
 const path = require('node:path');
 const { Config } = require('metaconfiguration');
@@ -187,6 +188,9 @@ const loadApplication = async (root, dir, master) => {
 };
 
 const loadApplications = async () => {
+  if (!stripTypeScriptTypes) {
+    throw new Error('TypeScript modules require Node.js 22.13 or newer');
+  }
   const applications = await fsp
     .readFile('.applications', 'utf8')
     .then((data) => data.split(/[\r\n\s]+/).filter((s) => s.length !== 0))
