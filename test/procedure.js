@@ -2,8 +2,11 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const { AsyncLocalStorage } = require('node:async_hooks');
 const metautil = require('metautil');
 const { Procedure } = require('../lib/procedure.js');
+
+const contextStorage = new AsyncLocalStorage();
 
 test('lib/procedure - should create procedure correctly', async () => {
   const script = () => ({
@@ -12,6 +15,7 @@ test('lib/procedure - should create procedure correctly', async () => {
 
   const application = {
     Error,
+    contextStorage,
     semaphore: {
       async enter() {},
       leave() {},
@@ -63,6 +67,7 @@ test('lib/procedure - should validate procedure correctly', async () => {
 
   const application = {
     Error,
+    contextStorage,
     semaphore: {
       async enter() {},
       leave() {},
@@ -97,6 +102,7 @@ test('lib/procedure - should validate procedure async', async () => {
 
   const application = {
     Error,
+    contextStorage,
     semaphore: {
       async enter() {},
       leave() {},
@@ -128,6 +134,7 @@ test('lib/procedure - should handle timeout correctly', async () => {
 
   const application = {
     Error,
+    contextStorage,
     semaphore: {
       async enter() {},
       leave() {},
@@ -164,6 +171,7 @@ test('lib/procedure - should handle queue correctly', async () => {
 
   const application = {
     Error,
+    contextStorage,
     semaphore: {
       async enter() {},
       leave() {},
@@ -228,6 +236,7 @@ test('lib/procedure - should handle global timeouts.request', async () => {
 
   const application = {
     Error,
+    contextStorage,
     semaphore: {
       async enter() {},
       leave() {},
@@ -241,4 +250,31 @@ test('lib/procedure - should handle global timeouts.request', async () => {
     () => procedure.invoke({}, { waitTime: 20 }),
     new Error('Timeout of 10ms reached'),
   );
+});
+
+test('lib/procedure - should preserve async context', async () => {
+  const script = () => ({
+    method: async ({ waitTime }) => {
+      await metautil.delay(waitTime);
+      return contextStorage.getStore().id;
+    },
+  });
+
+  const application = {
+    Error,
+    contextStorage,
+    semaphore: {
+      async enter() {},
+      leave() {},
+    },
+    config: { server: { timeouts: {} } },
+  };
+
+  const procedure = new Procedure(script, 'method', application);
+  const first = procedure.invoke({ id: 'first' }, { waitTime: 10 });
+  const second = procedure.invoke({ id: 'second' }, { waitTime: 1 });
+  const results = await Promise.all([first, second]);
+
+  assert.deepStrictEqual(results, ['first', 'second']);
+  assert.strictEqual(contextStorage.getStore(), undefined);
 });

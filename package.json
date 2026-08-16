@@ -66,6 +66,7 @@
     "node": ">=22.13"
   },
   "dependencies": {
+    "@nats-io/transport-node": "^3.4.0",
     "bullmq": "^5.78.0",
     "dayjs": "^1.11.18",
     "metacom": "github:88date/metacom#v3.5.2",

@@ -56,6 +56,12 @@ export interface CacheConfig {
   avoid?: Array<string>;
 }
 
+export interface ServiceConfig {
+  enabled: boolean;
+  servers?: string;
+  credentials?: string;
+}
+
 export interface SessionsConfig {
   sid: string;
   characters: string;

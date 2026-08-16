@@ -4,8 +4,10 @@ import {
   ServerConfig,
   SessionsConfig,
   CacheConfig,
+  ServiceConfig,
 } from './config';
 import { Application, Context, Client } from './core';
+import { Services } from './service';
 
 import * as _util from 'node:util';
 import * as _buffer from 'node:buffer';
@@ -50,6 +52,7 @@ import * as _metaconfiguration from 'metaconfiguration';
 declare global {
   const application: Application;
   const context: Context;
+  const service: Services;
 
   namespace config {
     const log: LogConfig;
@@ -57,6 +60,7 @@ declare global {
     const server: ServerConfig;
     const sessions: SessionsConfig;
     const cache: CacheConfig;
+    const service: ServiceConfig;
   }
 
   namespace metarhia {

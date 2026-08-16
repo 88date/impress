@@ -21,6 +21,9 @@ test('schemas/config - should validate config schemas correctly', async () => {
 
   const sessions = await loadSchema('./schemas/config/sessions.js');
   assert.strictEqual(sessions.check(config.sessions).valid, true);
+
+  const service = await loadSchema('./schemas/config/service.js');
+  assert.strictEqual(service.check(config.service).valid, true);
 });
 
 test('schemas/contracts - should load procedure contract', async () => {

@@ -13,7 +13,7 @@ const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
 const { Planner } = require('./lib/planner.js');
 
-const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions', 'mq'];
+const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions', 'mq', 'service'];
 const PATH = process.cwd();
 const WORKER_PATH = path.join(__dirname, 'lib/worker.js');
 const REPORTER_PATH = 'file://' + path.join(__dirname, 'lib/reporter.js');
