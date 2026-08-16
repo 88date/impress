@@ -10,12 +10,16 @@ const { Broker } = require('../lib/broker.js');
 const { Service } = require('../lib/service.js');
 
 const root = process.cwd();
+const logs = [];
 
 const application = {
   path: path.join(root, 'test'),
   sandbox: metavm.createContext({ service: {} }),
   watcher: { watch() {} },
-  console: { error() {} },
+  console: {
+    log: (message) => logs.push(['log', message]),
+    error: (message) => logs.push(['error', message]),
+  },
   contextStorage: new AsyncLocalStorage(),
   absolute(relative) {
     return path.join(this.path, relative);
@@ -295,14 +299,30 @@ test('lib/broker - should map domain error message', async () => {
     message: 'Operation failed',
     code: 'EFAIL',
   });
+  const [level, message] = logs.at(-1);
+  assert.strictEqual(level, 'error');
+  assert.match(
+    message,
+    /^-\tservice\texample\.1\/fail\t200\tEFAIL\tError: Operation failed/,
+  );
 
   const actionPath = path.join(root, 'test', 'service', 'example', 'fail.js');
   service.delete(actionPath);
 });
 
+test('lib/broker - should log service calls', async () => {
+  const context = { client: { ip: '127.0.0.1' } };
+  await application.contextStorage.run(context, () =>
+    application.sandbox.service.example.add({ a: 4, b: 6 }),
+  );
+
+  assert.deepStrictEqual(logs.at(-1), ['log', '127.0.0.1\texample.1/add']);
+});
+
 test('lib/broker - should route remote calls through NATS', async () => {
   const calls = [];
   const remoteApplication = {
+    console: { log() {}, error() {} },
     contextStorage: new AsyncLocalStorage(),
     schemas: null,
     service: {
@@ -350,6 +370,7 @@ test('lib/broker - should route remote calls through NATS', async () => {
 
 test('lib/broker - should use configured local version', async () => {
   const localApplication = {
+    console: { log() {}, error() {} },
     contextStorage: new AsyncLocalStorage(),
     schemas: null,
     service: {
