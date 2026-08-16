@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const { AsyncLocalStorage } = require('node:async_hooks');
-const { DomainError } = require('metautil');
+const { Error } = require('metautil');
 const { npm } = require('../lib/deps.js');
 const { Nats } = require('../lib/nats.js');
 
@@ -95,7 +95,7 @@ test('lib/nats - should request and respond', async () => {
   assert.strictEqual(request.options.timeout, 5000);
 });
 
-test('lib/nats - should transfer domain and internal errors', async () => {
+test('lib/nats - should transfer service errors', async () => {
   const logged = [];
   const application = {
     console: { error: (error) => logged.push(error) },
@@ -104,15 +104,21 @@ test('lib/nats - should transfer domain and internal errors', async () => {
   const nats = new Nats(application);
   nats.connection = createConnection();
   nats.subscribe('example.domain', async () => {
-    throw new DomainError('EFAIL');
+    throw new Error('Operation failed', { code: 'EFAIL' });
+  });
+  nats.subscribe('example.validation', async () => {
+    throw new Error('Invalid parameters');
   });
   nats.subscribe('example.internal', async () => {
     throw new globalThis.Error('Sensitive details');
   });
 
   await assert.rejects(nats.request('example.domain', {}, 5000), {
-    message: 'Domain error',
+    message: 'Operation failed',
     code: 'EFAIL',
+  });
+  await assert.rejects(nats.request('example.validation', {}, 5000), {
+    message: 'Invalid parameters',
   });
   await assert.rejects(nats.request('example.internal', {}, 5000), {
     message: 'Service request failed',

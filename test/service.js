@@ -5,6 +5,7 @@ const assert = require('node:assert');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const path = require('node:path');
 const metavm = require('metavm');
+const { DomainError } = require('metautil');
 const { Broker } = require('../lib/broker.js');
 const { Service } = require('../lib/service.js');
 
@@ -275,6 +276,30 @@ test('lib/broker access - should require session for logged', async () => {
   service.delete(actionPath);
 });
 
+test('lib/broker - should map domain error message', async () => {
+  const script = () => ({
+    access: 'public',
+    errors: { EFAIL: 'Operation failed' },
+    method: async () => {
+      throw new DomainError('EFAIL');
+    },
+  });
+  const broker = new Broker(script, 'method', 'example.1', application);
+  service.changeUnit('example.1', 'fail', broker);
+
+  await assert.rejects(broker.invoke({}, {}), {
+    message: 'Operation failed',
+    code: 'EFAIL',
+  });
+  await assert.rejects(application.sandbox.service.example.fail(), {
+    message: 'Operation failed',
+    code: 'EFAIL',
+  });
+
+  const actionPath = path.join(root, 'test', 'service', 'example', 'fail.js');
+  service.delete(actionPath);
+});
+
 test('lib/broker - should route remote calls through NATS', async () => {
   const calls = [];
   const remoteApplication = {
@@ -296,7 +321,11 @@ test('lib/broker - should route remote calls through NATS', async () => {
       },
     },
   };
-  const script = () => ({ access: 'public', method: async () => 0 });
+  const script = () => ({
+    access: 'public',
+    errors: { EFAIL: 'Operation failed' },
+    method: async () => 0,
+  });
   const broker = new Broker(script, 'method', 'example.1', remoteApplication);
   broker.actionName = 'add';
 
@@ -306,6 +335,14 @@ test('lib/broker - should route remote calls through NATS', async () => {
   assert.strictEqual(broker.subject, 'example.1.add');
   assert.strictEqual(broker.requestSubject, 'example.2.add');
   assert.deepStrictEqual(calls, [['example.2.add', { a: 4, b: 6 }, 5000]]);
+
+  remoteApplication.nats.request = async () => {
+    throw new DomainError('EFAIL').toError({ EFAIL: 'Operation failed' });
+  };
+  await assert.rejects(broker.call(), {
+    message: 'Operation failed',
+    code: 'EFAIL',
+  });
 
   broker.actionName = 'remove';
   assert.strictEqual(broker.requestSubject, 'example.1.remove');
