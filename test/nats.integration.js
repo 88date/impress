@@ -32,6 +32,7 @@ const configureAction = (application, location, name, method) => {
     location,
     versions: { default: 1 },
     request: { timeout: 2000 },
+    discovery: { maxWait: 1000 },
   };
   const script = (context) => ({
     access: 'logged',
@@ -41,13 +42,25 @@ const configureAction = (application, location, name, method) => {
   application.service.changeUnit('integration.1', name, broker);
 };
 
-const configureEvents = (application) => {
-  const { eventBroker } = application.service.prepareUnit('integration.1');
-  eventBroker.load({
-    completed: {
-      parameters: { value: 'number' },
-    },
-  });
+const configureRemote = (application) => {
+  application.service.configs['integration.1'] = {
+    location: 'remote',
+    versions: { default: 1 },
+    request: { timeout: 2000 },
+    discovery: { maxWait: 1000 },
+  };
+  application.service.prepareUnit('integration.1');
+};
+
+const configureEvents = (application, source = true) => {
+  if (source) {
+    const { eventBroker } = application.service.prepareUnit('integration.1');
+    eventBroker.load({
+      completed: {
+        parameters: { value: 'number' },
+      },
+    });
+  }
   application.service.prepareUnit('audit.1');
 };
 
@@ -64,14 +77,11 @@ test(
     const fail = () => {
       throw new DomainError('E_INTEGRATION');
     };
-    const remote = () => null;
-
     configureAction(provider, 'local', 'echo', echo);
     configureAction(provider, 'local', 'fail', fail);
-    configureAction(consumer, 'remote', 'echo', remote);
-    configureAction(consumer, 'remote', 'fail', remote);
+    configureRemote(consumer);
     configureEvents(provider);
-    configureEvents(consumer);
+    configureEvents(consumer, false);
 
     provider.nats = new Nats(provider);
     consumer.nats = new Nats(consumer);

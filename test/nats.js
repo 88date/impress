@@ -7,11 +7,22 @@ const { Error } = require('metautil');
 const { npm } = require('../lib/deps.js');
 const { Nats } = require('../lib/nats.js');
 
+const matches = (pattern, subject) => {
+  const expected = pattern.split('.');
+  const actual = subject.split('.');
+  if (expected.length !== actual.length) return false;
+  return expected.every(
+    (part, index) => part === '*' || part === actual[index],
+  );
+};
+
 const createConnection = () => {
   const requests = [];
+  const published = [];
   const subscriptions = new Map();
   const connection = {
     requests,
+    published,
     subscriptions,
     subscribe(subject, options) {
       subscriptions.set(subject, options);
@@ -34,6 +45,41 @@ const createConnection = () => {
         Promise.resolve(subscription.callback(null, message)).catch(reject);
       });
     },
+    async requestMany(subject, payload, options) {
+      requests.push({ subject, payload, options });
+      const responses = [];
+      const subscription = subscriptions.get(subject);
+      if (subscription) {
+        const message = {
+          subject,
+          json: () => JSON.parse(payload),
+          respond: (response) => {
+            responses.push(response);
+            return true;
+          },
+        };
+        await subscription.callback(null, message);
+      }
+      return {
+        async *[Symbol.asyncIterator]() {
+          for (const response of responses) {
+            yield { json: () => JSON.parse(response) };
+          }
+        },
+      };
+    },
+    publish(subject, payload) {
+      published.push({ subject, payload });
+      for (const [pattern, subscription] of subscriptions) {
+        if (!matches(pattern, subject)) continue;
+        const message = {
+          subject,
+          json: () => JSON.parse(payload),
+        };
+        Promise.resolve(subscription.callback(null, message)).catch(() => {});
+      }
+    },
+    async flush() {},
   };
   return connection;
 };
@@ -64,6 +110,22 @@ test('lib/nats - should drain connection on close', async () => {
   assert.strictEqual(nats.connection, null);
 });
 
+test('lib/nats - should refresh discovery after reconnect', async () => {
+  const calls = [];
+  const nats = new Nats({ console: { error() {} } });
+  nats.connection = {
+    async *status() {
+      yield { type: 'reconnect' };
+    },
+  };
+  nats.announceServices = () => calls.push('announce');
+  nats.discoverServices = async () => calls.push('discover');
+
+  await nats.watchStatus();
+
+  assert.deepStrictEqual(calls, ['announce', 'discover']);
+});
+
 test('lib/nats - should request and respond', async () => {
   const contextStorage = new AsyncLocalStorage();
   const application = { console: { error() {} }, contextStorage };
@@ -80,14 +142,18 @@ test('lib/nats - should request and respond', async () => {
     token: 'session-token',
     state: { userId: 'user-1', language: 'ru' },
   };
-  const context = { session, state: { internal: true } };
+  const context = {
+    session,
+    client: { ip: '127.0.0.1' },
+    state: { internal: true },
+  };
 
   const result = await contextStorage.run(context, () =>
     nats.request('example.1.add', { a: 4, b: 6 }, 5000),
   );
 
   assert.strictEqual(result, 10);
-  assert.deepStrictEqual(receivedContext, { session });
+  assert.deepStrictEqual(receivedContext, { session, ip: '127.0.0.1' });
   const subscription = nats.connection.subscriptions.get('example.1.add');
   assert.strictEqual(subscription.queue, 'example.1.add');
   const request = nats.connection.requests[0];
@@ -206,17 +272,123 @@ test('lib/nats - should subscribe local services', async () => {
   assert.strictEqual(nats.serviceSubscriptions.has('example.1.update'), false);
 });
 
+test('lib/nats - should discover remote services', async () => {
+  const connection = createConnection();
+  const actions = [
+    {
+      name: 'sendMessage',
+      version: 1,
+      access: 'public',
+      parameters: null,
+      returns: null,
+      errors: null,
+      caption: '',
+      description: '',
+      deprecated: false,
+      examples: null,
+    },
+  ];
+  const events = [
+    {
+      name: 'message:created',
+      parameters: { conversationId: 'string' },
+      caption: '',
+      description: '',
+      deprecated: false,
+      examples: null,
+    },
+  ];
+  const localConfig = { location: 'local' };
+  const remoteConfig = {
+    location: 'remote',
+    discovery: { maxWait: 250 },
+  };
+  const provider = new Nats({
+    console: { error() {} },
+    service: {
+      collection: { supportChat: { default: 1 } },
+      getConfig: () => localConfig,
+      describe: (name) => ({ name, actions, events }),
+    },
+  });
+  const loaded = [];
+  const consumer = new Nats({
+    console: { error() {} },
+    service: {
+      collection: { supportChat: { default: 1 } },
+      getConfig: () => remoteConfig,
+      loadRemote: (name, contracts, eventContracts) =>
+        loaded.push({ name, contracts, events: eventContracts }),
+    },
+  });
+  provider.connection = connection;
+  consumer.connection = connection;
+
+  provider.subscribeDiscovery();
+  consumer.subscribeDiscoveryChanges();
+  await consumer.discoverServices();
+
+  assert.deepStrictEqual(loaded, [
+    { name: 'supportChat', contracts: actions, events },
+  ]);
+  const request = connection.requests.at(-1);
+  assert.strictEqual(request.subject, 'service.discovery.supportChat');
+  assert.deepStrictEqual(request.options, {
+    strategy: 'timer',
+    maxWait: 250,
+  });
+
+  actions.push({ ...actions[0], name: 'createConversation' });
+  events.push({ ...events[0], name: 'conversation:created' });
+  const subscription = connection.subscriptions.get(
+    'service.discovery.changed.*',
+  );
+  await subscription.callback(null, {
+    subject: 'service.discovery.changed.supportChat',
+  });
+
+  assert.deepStrictEqual(loaded.at(-1), {
+    name: 'supportChat',
+    contracts: actions,
+    events,
+  });
+
+  provider.updateDiscovery('supportChat');
+  assert.strictEqual(
+    connection.published.at(-1).subject,
+    'service.discovery.changed.supportChat',
+  );
+});
+
+test('lib/nats - should fail discovery without providers', async () => {
+  const application = {
+    service: {
+      collection: { supportChat: { default: 1 } },
+      getConfig: () => ({
+        location: 'remote',
+        discovery: { maxWait: 100 },
+      }),
+    },
+  };
+  const nats = new Nats(application);
+  nats.connection = createConnection();
+
+  await assert.rejects(nats.discoverServices(), {
+    message: 'Service discovery failed: supportChat',
+  });
+});
+
 test('lib/nats - should publish and subscribe events', async () => {
   const invocations = [];
   const supportChat = {
     name: 'supportChat',
     eventNames: () => ['user:created'],
-    invoke: (...args) => invocations.push(args),
+    dispatch: (...args) => invocations.push(args),
   };
   const location = {
     name: 'location',
     eventNames: () => ['user:created'],
-    invoke: (...args) => invocations.push(args),
+    dispatch: (...args) => invocations.push(args),
   };
   const application = {
     console: { error() {} },
@@ -261,11 +433,11 @@ test('lib/nats - should publish and subscribe events', async () => {
   const currentInvocations = [];
   application.service.events.supportChat = {
     ...supportChat,
-    invoke: (...args) => currentInvocations.push(args),
+    dispatch: (...args) => currentInvocations.push(args),
   };
   application.service.events.location = {
     ...location,
-    invoke: (...args) => currentInvocations.push(args),
+    dispatch: (...args) => currentInvocations.push(args),
   };
   await subscriptions[0].options.callback(null, message);
   await subscriptions[1].options.callback(null, message);

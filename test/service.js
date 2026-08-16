@@ -55,6 +55,14 @@ test('lib/service load - should load service correctly', async () => {
   assert.strictEqual(config.request.timeout, 5000);
   assert.strictEqual(config.discovery.maxWait, 1000);
 
+  const metadata = service.describe('example');
+  assert.strictEqual(metadata.name, 'example');
+  assert.strictEqual(metadata.actions[0].name, 'add');
+  assert.strictEqual(metadata.actions[0].version, 1);
+  assert.strictEqual('method' in metadata.actions[0], false);
+  assert.strictEqual(metadata.events[0].name, 'calculation:complete');
+  assert.strictEqual(metadata.events[0].parameters.result, 'number');
+
   const eventBroker = service.events.example;
   const complete = eventBroker.collection['calculation:complete'];
   assert.strictEqual(eventBroker.constructor.name, 'EventBroker');
@@ -110,6 +118,98 @@ test('lib/service metadata - should reload config and events', async () => {
       .result,
     'number',
   );
+});
+
+test('lib/service discovery - should load remote contracts', async () => {
+  const name = 'remoteChat';
+  service.prepareUnit(`${name}.1`);
+  service.configs[`${name}.1`] = {
+    location: 'remote',
+    versions: { default: 1 },
+    request: { timeout: 5000 },
+    discovery: { maxWait: 1000 },
+  };
+  const contract = {
+    name: 'sendMessage',
+    version: 1,
+    access: 'public',
+    parameters: { text: 'string' },
+    returns: 'string',
+    errors: null,
+    caption: 'Send message',
+    description: '',
+    deprecated: false,
+    examples: null,
+  };
+  const event = {
+    name: 'message:created',
+    parameters: { conversationId: 'string' },
+    caption: 'Message created',
+    description: '',
+    deprecated: false,
+    examples: null,
+  };
+
+  service.loadRemote(name, [contract], [event]);
+
+  const broker = service.collection.remoteChat['1'].sendMessage;
+  assert.strictEqual(broker.discovered, true);
+  assert.strictEqual(broker.script, null);
+  assert.strictEqual(broker.caption, 'Send message');
+  assert.deepStrictEqual(
+    service.events.remoteChat.collection['message:created'].exports,
+    event,
+  );
+  assert.strictEqual(
+    typeof application.sandbox.service.remoteChat.sendMessage,
+    'function',
+  );
+
+  const requests = [];
+  application.nats = {
+    request: async (...args) => {
+      requests.push(args);
+      return 'sent';
+    },
+    subscribeService() {},
+  };
+  const result = await application.sandbox.service.remoteChat.sendMessage({
+    text: 'Hello',
+  });
+
+  assert.strictEqual(result, 'sent');
+  assert.deepStrictEqual(requests, [
+    ['remoteChat.1.sendMessage', { text: 'Hello' }, 5000],
+  ]);
+
+  const updatedEvent = { ...event, name: 'conversation:created' };
+  service.loadRemote(
+    name,
+    [{ ...contract, name: 'createConversation' }],
+    [updatedEvent],
+  );
+  assert.strictEqual(
+    application.sandbox.service.remoteChat.sendMessage,
+    undefined,
+  );
+  assert.strictEqual(
+    typeof application.sandbox.service.remoteChat.createConversation,
+    'function',
+  );
+  assert.strictEqual(
+    service.events.remoteChat.collection['message:created'],
+    undefined,
+  );
+  assert.deepStrictEqual(
+    service.events.remoteChat.collection['conversation:created'].exports,
+    updatedEvent,
+  );
+
+  application.nats = null;
+  delete service.configs[`${name}.1`];
+  delete service.collection[name];
+  delete service.events[name];
+  delete application.sandbox.service[name];
 });
 
 test('lib/service events - should select one handler per group', async () => {
@@ -198,6 +298,7 @@ test('lib/service reload - should update NATS subscriptions', () => {
   application.nats = {
     subscribeService: (broker) => subscribed.push(broker.subject),
     unsubscribeService: (subject) => unsubscribed.push(subject),
+    updateDiscovery() {},
   };
   const script = () => ({
     access: 'public',
@@ -256,7 +357,7 @@ test('lib/broker access - should require session for logged', async () => {
   const broker = new Broker(script, 'method', 'example.1', application);
   service.changeUnit('example.1', 'private', broker);
 
-  assert.throws(() => application.sandbox.service.example.private(), {
+  await assert.rejects(application.sandbox.service.example.private(), {
     message: 'Authentication required',
   });
   await assert.rejects(broker.invoke({ session: null }), {
@@ -316,23 +417,28 @@ test('lib/broker - should log service calls', async () => {
     application.sandbox.service.example.add({ a: 4, b: 6 }),
   );
 
-  assert.deepStrictEqual(logs.at(-1), ['log', '127.0.0.1\texample.1/add']);
+  assert.deepStrictEqual(logs.at(-1), [
+    'log',
+    '127.0.0.1\tservice\texample.1/add',
+  ]);
 });
 
 test('lib/broker - should route remote calls through NATS', async () => {
   const calls = [];
+  const logs = [];
+  const config = {
+    location: 'remote',
+    request: { timeout: 5000 },
+  };
   const remoteApplication = {
-    console: { log() {}, error() {} },
+    console: {
+      log: (...args) => logs.push(['log', ...args]),
+      error: (...args) => logs.push(['error', ...args]),
+    },
     contextStorage: new AsyncLocalStorage(),
     schemas: null,
     service: {
-      configs: {
-        'example.1': {
-          location: 'remote',
-          versions: { default: 1, add: 2 },
-          request: { timeout: 5000 },
-        },
-      },
+      getConfig: () => config,
     },
     nats: {
       request: async (...args) => {
@@ -346,15 +452,15 @@ test('lib/broker - should route remote calls through NATS', async () => {
     errors: { EFAIL: 'Operation failed' },
     method: async () => 0,
   });
-  const broker = new Broker(script, 'method', 'example.1', remoteApplication);
+  const broker = new Broker(script, 'method', 'example.2', remoteApplication);
   broker.actionName = 'add';
 
   const result = await broker.call({ a: 4, b: 6 });
 
   assert.strictEqual(result, 10);
-  assert.strictEqual(broker.subject, 'example.1.add');
-  assert.strictEqual(broker.requestSubject, 'example.2.add');
+  assert.strictEqual(broker.subject, 'example.2.add');
   assert.deepStrictEqual(calls, [['example.2.add', { a: 4, b: 6 }, 5000]]);
+  assert.deepStrictEqual(logs, []);
 
   remoteApplication.nats.request = async () => {
     throw new DomainError('EFAIL').toError({ EFAIL: 'Operation failed' });
@@ -365,43 +471,49 @@ test('lib/broker - should route remote calls through NATS', async () => {
   });
 
   broker.actionName = 'remove';
-  assert.strictEqual(broker.requestSubject, 'example.1.remove');
+  assert.strictEqual(broker.subject, 'example.2.remove');
 });
 
-test('lib/broker - should use configured local version', async () => {
-  const localApplication = {
-    console: { log() {}, error() {} },
-    contextStorage: new AsyncLocalStorage(),
-    schemas: null,
-    service: {
-      configs: {
-        'example.1': {
-          location: 'local',
-          versions: { default: 1, add: 2 },
-        },
-      },
-      collection: null,
-    },
-  };
-  const v1 = new Broker(
-    () => ({ access: 'public', method: async () => 1 }),
-    'method',
-    'example.1',
-    localApplication,
-  );
+test('lib/service - should select configured version', async () => {
+  const config = service.configs['example.1'];
+  const previousVersions = config.versions;
+  const namespaceMethod = application.sandbox.service.example.add;
   const v2 = new Broker(
     () => ({ access: 'public', method: async () => 2 }),
     'method',
     'example.2',
-    localApplication,
+    application,
   );
-  v1.actionName = 'add';
-  v2.actionName = 'add';
-  localApplication.service.collection = {
-    example: { default: 1, 1: { add: v1 }, 2: { add: v2 } },
+  service.changeUnit('example.2', 'add', v2);
+  config.versions = { default: 1, add: 2 };
+
+  const localResult = await application.sandbox.service.example.add();
+
+  assert.strictEqual(localResult, 2);
+  assert.strictEqual(application.sandbox.service.example.add, namespaceMethod);
+
+  config.versions.add = 3;
+  await assert.rejects(application.sandbox.service.example.add(), {
+    message: 'Service action is not available: example.3.add',
+  });
+  config.versions.add = 2;
+
+  const calls = [];
+  config.location = 'remote';
+  application.nats = {
+    request: async (...args) => {
+      calls.push(args);
+      return 3;
+    },
   };
+  const remoteResult = await application.sandbox.service.example.add();
 
-  const result = await v1.call();
+  assert.strictEqual(remoteResult, 3);
+  assert.deepStrictEqual(calls, [['example.2.add', {}, 5000]]);
 
-  assert.strictEqual(result, 2);
+  application.nats = null;
+  config.location = 'local';
+  config.versions = previousVersions;
+  const actionPath = path.join(root, 'test', 'service', 'example.2', 'add.js');
+  service.delete(actionPath);
 });
