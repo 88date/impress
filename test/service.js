@@ -317,6 +317,36 @@ test('lib/service reload - should update NATS subscriptions', () => {
   application.nats = null;
 });
 
+test('lib/service delete - should remove event subscriptions', () => {
+  const name = 'subscriber';
+  const unitName = `${name}.1`;
+  service.configs[unitName] = { location: 'local' };
+  const { eventBroker } = service.prepareUnit(unitName);
+  eventBroker.on('example:calculation:complete', () => {});
+  eventBroker.indexes.set('example:calculation:complete', 1);
+  const calls = [];
+  application.nats = {
+    subscribeServices: () => calls.push('services'),
+    subscribeEvents: () => calls.push('events'),
+    updateDiscovery: () => calls.push('discovery'),
+  };
+
+  const configPath = path.join(root, 'test', 'service', name, '.service.js');
+  service.delete(configPath);
+
+  assert.strictEqual(
+    eventBroker.listenerCount('example:calculation:complete'),
+    0,
+  );
+  assert.strictEqual(eventBroker.indexes.size, 0);
+  assert.deepStrictEqual(calls, ['services', 'events', 'discovery']);
+
+  application.nats = null;
+  delete service.collection[name];
+  delete service.events[name];
+  delete application.sandbox.service[name];
+});
+
 test('lib/service delete - should preserve another version', async () => {
   const v1 = new Broker(
     () => ({ access: 'public', method: async () => 1 }),
