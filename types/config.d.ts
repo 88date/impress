@@ -60,6 +60,9 @@ export interface ServiceConfig {
   enabled: boolean;
   servers?: string;
   credentials?: string;
+  discovery: {
+    maxWait: number;
+  };
 }
 
 export interface SessionsConfig {

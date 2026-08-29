@@ -1,5 +1,7 @@
 ({
+  service: true,
   access: 'public',
+  timeout: 5000,
 
   parameters: {
     a: 'number',

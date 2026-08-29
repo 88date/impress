@@ -18,7 +18,14 @@ const createApplication = () => {
     sandbox: metavm.createContext({ service: {} }),
     console,
     contextStorage: new AsyncLocalStorage(),
-    config: { service: { servers, credentials } },
+    config: {
+      service: {
+        servers,
+        credentials,
+        discovery: { maxWait: 1000 },
+      },
+      server: { timeouts: { request: 2000 } },
+    },
     nats: null,
     schemas: null,
     absolute: (name) => name,
@@ -27,29 +34,22 @@ const createApplication = () => {
   return application;
 };
 
-const configureAction = (application, location, name, method) => {
-  application.service.configs['integration.1'] = {
-    location,
-    versions: { default: 1 },
-    request: { timeout: 2000 },
-    discovery: { maxWait: 1000 },
-  };
+const configureAction = (application, name, method) => {
   const script = (context) => ({
     access: 'logged',
+    timeout: 2000,
     method: (args) => method(context, args),
   });
   const broker = new Broker(script, 'method', 'integration.1', application);
   application.service.changeUnit('integration.1', name, broker);
 };
 
-const configureRemote = (application) => {
-  application.service.configs['integration.1'] = {
-    location: 'remote',
-    versions: { default: 1 },
-    request: { timeout: 2000 },
-    discovery: { maxWait: 1000 },
-  };
-  application.service.prepareUnit('integration.1');
+const configureRemote = (application, names) => {
+  for (const name of names) {
+    const script = () => ({ access: 'logged', timeout: 2000 });
+    const broker = new Broker(script, 'method', 'integration.1', application);
+    application.service.changeUnit('integration.1', name, broker);
+  }
 };
 
 const configureEvents = (application, source = true) => {
@@ -77,9 +77,9 @@ test(
     const fail = () => {
       throw new DomainError('E_INTEGRATION');
     };
-    configureAction(provider, 'local', 'echo', echo);
-    configureAction(provider, 'local', 'fail', fail);
-    configureRemote(consumer);
+    configureAction(provider, 'echo', echo);
+    configureAction(provider, 'fail', fail);
+    configureRemote(consumer, ['echo', 'fail']);
     configureEvents(provider);
     configureEvents(consumer, false);
 

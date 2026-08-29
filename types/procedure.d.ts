@@ -30,6 +30,7 @@ interface Procedure {
   access?: Access;
   validate?: Function;
   timeout?: number;
+  service?: boolean;
   queue?: QueueParameters;
   serializer?: Serializer;
   protocols?: Array<Protocols>;

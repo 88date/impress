@@ -27,6 +27,7 @@ test('lib/application - should have correct application properties', () => {
   assert.strictEqual(application.resources.constructor.name, 'Static');
   assert.strictEqual(application.api.constructor.name, 'Api');
   assert.strictEqual(application.service.constructor.name, 'Service');
+  assert.strictEqual(application.service.path, application.api.path);
   assert.strictEqual(application.lib.constructor.name, 'Code');
   assert.strictEqual(application.db.constructor.name, 'Code');
   assert.strictEqual(application.bus.constructor.name, 'Code');

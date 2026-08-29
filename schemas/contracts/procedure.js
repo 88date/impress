@@ -5,6 +5,7 @@
   parameters: '?Schema',
   validate: '?Function',
   timeout: { type: 'number', required: false },
+  service: { type: 'boolean', required: false },
   queue: '?QueueParameters',
   serializer: '?Serializer',
   protocols: '?Protocols',

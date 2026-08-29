@@ -196,7 +196,7 @@ test('lib/nats - should transfer service errors', async () => {
 test('lib/nats - should subscribe local services', async () => {
   const calls = [];
   const localV1 = {
-    config: { location: 'local' },
+    method: async () => {},
     serviceName: 'example',
     version: 1,
     actionName: 'update',
@@ -204,14 +204,14 @@ test('lib/nats - should subscribe local services', async () => {
     invoke: async (context, args) => calls.push({ context, args }),
   };
   const localV2 = {
-    config: { location: 'local' },
+    method: async () => {},
     serviceName: 'example',
     version: 2,
     actionName: 'get',
     subject: 'example.2.get',
     invoke: async (context, args) => calls.push({ context, args }),
   };
-  const remote = { subject: 'remote.get' };
+  const remote = { method: null, subject: 'remote.get' };
   const application = {
     contextStorage: new AsyncLocalStorage(),
     service: {
@@ -222,10 +222,6 @@ test('lib/nats - should subscribe local services', async () => {
           2: { get: localV2 },
         },
         remote: { default: 1, 1: { get: remote } },
-      },
-      configs: {
-        'example.1': { location: 'local' },
-        'remote.1': { location: 'remote' },
       },
     },
   };
@@ -288,37 +284,23 @@ test('lib/nats - should discover remote services', async () => {
       examples: null,
     },
   ];
-  const events = [
-    {
-      name: 'message:created',
-      parameters: { conversationId: 'string' },
-      caption: '',
-      description: '',
-      deprecated: false,
-      examples: null,
-    },
-  ];
-  const localConfig = { location: 'local' };
-  const remoteConfig = {
-    location: 'remote',
-    discovery: { maxWait: 250 },
-  };
   const provider = new Nats({
     console: { error() {} },
+    config: { service: { discovery: { maxWait: 250 } } },
     service: {
       collection: { supportChat: { default: 1 } },
-      getConfig: () => localConfig,
-      describe: (name) => ({ name, actions, events }),
+      isRemote: () => false,
+      describe: (name) => ({ name, actions, events: [] }),
     },
   });
   const loaded = [];
   const consumer = new Nats({
     console: { error() {} },
+    config: { service: { discovery: { maxWait: 250 } } },
     service: {
       collection: { supportChat: { default: 1 } },
-      getConfig: () => remoteConfig,
-      loadRemote: (name, contracts, eventContracts) =>
-        loaded.push({ name, contracts, events: eventContracts }),
+      isRemote: () => true,
+      loadRemote: (name, contracts) => loaded.push({ name, contracts }),
     },
   });
   provider.connection = connection;
@@ -328,9 +310,7 @@ test('lib/nats - should discover remote services', async () => {
   consumer.subscribeDiscoveryChanges();
   await consumer.discoverServices();
 
-  assert.deepStrictEqual(loaded, [
-    { name: 'supportChat', contracts: actions, events },
-  ]);
+  assert.deepStrictEqual(loaded, [{ name: 'supportChat', contracts: actions }]);
   const request = connection.requests.at(-1);
   assert.strictEqual(request.subject, 'service.discovery.supportChat');
   assert.deepStrictEqual(request.options, {
@@ -339,7 +319,6 @@ test('lib/nats - should discover remote services', async () => {
   });
 
   actions.push({ ...actions[0], name: 'createConversation' });
-  events.push({ ...events[0], name: 'conversation:created' });
   const subscription = connection.subscriptions.get(
     'service.discovery.changed.*',
   );
@@ -350,7 +329,6 @@ test('lib/nats - should discover remote services', async () => {
   assert.deepStrictEqual(loaded.at(-1), {
     name: 'supportChat',
     contracts: actions,
-    events,
   });
 
   provider.updateDiscovery('supportChat');
@@ -362,12 +340,10 @@ test('lib/nats - should discover remote services', async () => {
 
 test('lib/nats - should fail discovery without providers', async () => {
   const application = {
+    config: { service: { discovery: { maxWait: 100 } } },
     service: {
       collection: { supportChat: { default: 1 } },
-      getConfig: () => ({
-        location: 'remote',
-        discovery: { maxWait: 100 },
-      }),
+      isRemote: () => true,
     },
   };
   const nats = new Nats(application);

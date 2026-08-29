@@ -28,5 +28,5 @@ test('schemas/config - should validate config schemas correctly', async () => {
 
 test('schemas/contracts - should load procedure contract', async () => {
   const proc = await loadSchema('./schemas/contracts/procedure.js');
-  assert.strictEqual(Object.keys(proc.fields).length, 16);
+  assert.strictEqual(Object.keys(proc.fields).length, 17);
 });
