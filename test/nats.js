@@ -126,6 +126,19 @@ test('lib/nats - should refresh discovery after reconnect', async () => {
   assert.deepStrictEqual(calls, ['announce', 'discover']);
 });
 
+test('lib/nats - should announce service catalog once', () => {
+  const nats = new Nats({});
+  nats.connection = createConnection();
+  nats.discoverySubscriptions.set('city', {});
+  nats.discoverySubscriptions.set('profile', {});
+
+  nats.announceServices();
+
+  assert.deepStrictEqual(nats.connection.published, [
+    { subject: 'service.discovery.changed', payload: undefined },
+  ]);
+});
+
 test('lib/nats - should request and respond', async () => {
   const contextStorage = new AsyncLocalStorage();
   const application = { console: { error() {} }, contextStorage };
@@ -294,14 +307,21 @@ test('lib/nats - should discover remote services', async () => {
     },
   });
   const loaded = [];
+  const consumerService = {
+    collection: {},
+    isRemote(name) {
+      return Boolean(this.collection[name]);
+    },
+    loadRemote(name, contracts) {
+      loaded.push({ name, contracts });
+      if (contracts.length > 0) this.collection[name] = { default: 1 };
+      else delete this.collection[name];
+    },
+  };
   const consumer = new Nats({
     console: { error() {} },
     config: { service: { discovery: { maxWait: 250 } } },
-    service: {
-      collection: {},
-      isRemote: () => false,
-      loadRemote: (name, contracts) => loaded.push({ name, contracts }),
-    },
+    service: consumerService,
   });
   provider.connection = connection;
   consumer.connection = connection;
@@ -321,10 +341,10 @@ test('lib/nats - should discover remote services', async () => {
 
   actions.push({ ...actions[0], name: 'createConversation' });
   const subscription = connection.subscriptions.get(
-    'service.discovery.changed.*',
+    'service.discovery.changed',
   );
   await subscription.callback(null, {
-    subject: 'service.discovery.changed.supportChat',
+    subject: 'service.discovery.changed',
   });
 
   assert.deepStrictEqual(loaded.at(-1), {
@@ -332,10 +352,20 @@ test('lib/nats - should discover remote services', async () => {
     contracts: actions,
   });
 
-  provider.updateDiscovery('supportChat');
+  actions.length = 0;
+  provider.subscribeDiscovery();
+  await subscription.callback(null, {
+    subject: 'service.discovery.changed',
+  });
+  assert.deepStrictEqual(loaded.at(-1), {
+    name: 'supportChat',
+    contracts: [],
+  });
+
+  provider.updateDiscovery();
   assert.strictEqual(
     connection.published.at(-1).subject,
-    'service.discovery.changed.supportChat',
+    'service.discovery.changed',
   );
 });
 
@@ -353,22 +383,6 @@ test('lib/nats - should fail discovery without providers', async () => {
   await assert.rejects(nats.discoverServices(), {
     message: 'Service discovery failed',
   });
-});
-
-test('lib/nats - should remove service without providers', async () => {
-  const loaded = [];
-  const application = {
-    config: { service: { discovery: { maxWait: 100 } } },
-    service: {
-      loadRemote: (name, contracts) => loaded.push({ name, contracts }),
-    },
-  };
-  const nats = new Nats(application);
-  nats.connection = createConnection();
-
-  await nats.requestDiscovery('city');
-
-  assert.deepStrictEqual(loaded, [{ name: 'city', contracts: [] }]);
 });
 
 test('lib/nats - should publish and subscribe events', async () => {
