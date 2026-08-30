@@ -49,17 +49,16 @@ const createConnection = () => {
       requests.push({ subject, payload, options });
       const responses = [];
       const subscription = subscriptions.get(subject);
-      if (subscription) {
-        const message = {
-          subject,
-          json: () => JSON.parse(payload),
-          respond: (response) => {
-            responses.push(response);
-            return true;
-          },
-        };
-        await subscription.callback(null, message);
-      }
+      if (!subscription) throw new npm.nats.NoRespondersError(subject);
+      const message = {
+        subject,
+        json: () => JSON.parse(payload),
+        respond: (response) => {
+          responses.push(response);
+          return true;
+        },
+      };
+      await subscription.callback(null, message);
       return {
         async *[Symbol.asyncIterator]() {
           for (const response of responses) {
@@ -354,6 +353,22 @@ test('lib/nats - should fail discovery without providers', async () => {
   await assert.rejects(nats.discoverServices(), {
     message: 'Service discovery failed',
   });
+});
+
+test('lib/nats - should remove service without providers', async () => {
+  const loaded = [];
+  const application = {
+    config: { service: { discovery: { maxWait: 100 } } },
+    service: {
+      loadRemote: (name, contracts) => loaded.push({ name, contracts }),
+    },
+  };
+  const nats = new Nats(application);
+  nats.connection = createConnection();
+
+  await nats.requestDiscovery('city');
+
+  assert.deepStrictEqual(loaded, [{ name: 'city', contracts: [] }]);
 });
 
 test('lib/nats - should publish and subscribe events', async () => {
