@@ -38,4 +38,19 @@ test('lib/application - should have correct application properties', () => {
   assert.strictEqual(application.console, null);
   assert.strictEqual(application.auth, null);
   assert.strictEqual(application.watcher, null);
+  assert.strictEqual(typeof application.getDocumentation, 'function');
+});
+
+test('lib/application - should expose documentation to sandbox', async () => {
+  application.config = { server: {} };
+  application.console = console;
+  application.createSandbox();
+
+  const { getDocumentation } = application.sandbox.application;
+  assert.strictEqual(typeof getDocumentation, 'function');
+  const documentation = await getDocumentation();
+  assert.deepStrictEqual(documentation.api, {});
+  assert.deepStrictEqual(documentation.services, {});
+  assert.strictEqual(typeof documentation.schemas, 'object');
+  assert.deepStrictEqual(documentation.queues, {});
 });

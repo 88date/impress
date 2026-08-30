@@ -59,6 +59,30 @@ export interface Client {
   emit(name: string, data: object): void;
 }
 
+export interface DocumentationEndpoint {
+  caption?: string;
+  description?: string;
+  protocols?: unknown;
+  roles?: unknown;
+  access?: string;
+  parameters?: unknown;
+  deprecated?: boolean;
+  returns?: unknown;
+  errors?: unknown;
+  example: unknown;
+}
+
+export type DocumentationMethods = Record<string, DocumentationEndpoint>;
+export type DocumentationVersions = Record<string, DocumentationMethods>;
+export type DocumentationUnits = Record<string, DocumentationVersions>;
+
+export interface ApplicationDocumentation {
+  api: DocumentationUnits;
+  services: DocumentationUnits;
+  schemas: Record<string, unknown>;
+  queues: Record<string, unknown>;
+}
+
 export interface Application extends EventEmitter {
   worker: { id: string };
   server: { host: string; port: number; protocol: string };
@@ -67,6 +91,7 @@ export interface Application extends EventEmitter {
   scheduler: Scheduler;
   mode: string;
   introspect: (units: Array<string>) => Promise<object>;
+  getDocumentation: () => Promise<ApplicationDocumentation>;
   invoke: (target: InvokeTarget) => Promise<unknown>;
   on(event: 'loading', listener: Listener): this;
   once(event: 'loading', listener: Listener): this;
