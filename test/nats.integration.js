@@ -44,14 +44,6 @@ const configureAction = (application, name, method) => {
   application.service.changeUnit('integration.1', name, broker);
 };
 
-const configureRemote = (application, names) => {
-  for (const name of names) {
-    const script = () => ({ access: 'logged', timeout: 2000 });
-    const broker = new Broker(script, 'method', 'integration.1', application);
-    application.service.changeUnit('integration.1', name, broker);
-  }
-};
-
 const configureEvents = (application, source = true) => {
   if (source) {
     const { eventBroker } = application.service.prepareUnit('integration.1');
@@ -79,7 +71,6 @@ test(
     };
     configureAction(provider, 'echo', echo);
     configureAction(provider, 'fail', fail);
-    configureRemote(consumer, ['echo', 'fail']);
     configureEvents(provider);
     configureEvents(consumer, false);
 

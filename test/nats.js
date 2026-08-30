@@ -108,6 +108,7 @@ test('lib/nats - should drain connection on close', async () => {
   await nats.close();
   assert.strictEqual(drained, true);
   assert.strictEqual(nats.connection, null);
+  assert.strictEqual(nats.discoveryCatalogSubscription, null);
 });
 
 test('lib/nats - should refresh discovery after reconnect', async () => {
@@ -298,8 +299,8 @@ test('lib/nats - should discover remote services', async () => {
     console: { error() {} },
     config: { service: { discovery: { maxWait: 250 } } },
     service: {
-      collection: { supportChat: { default: 1 } },
-      isRemote: () => true,
+      collection: {},
+      isRemote: () => false,
       loadRemote: (name, contracts) => loaded.push({ name, contracts }),
     },
   });
@@ -307,12 +308,13 @@ test('lib/nats - should discover remote services', async () => {
   consumer.connection = connection;
 
   provider.subscribeDiscovery();
+  provider.subscribeDiscoveryCatalog();
   consumer.subscribeDiscoveryChanges();
   await consumer.discoverServices();
 
   assert.deepStrictEqual(loaded, [{ name: 'supportChat', contracts: actions }]);
   const request = connection.requests.at(-1);
-  assert.strictEqual(request.subject, 'service.discovery.supportChat');
+  assert.strictEqual(request.subject, 'service.discovery');
   assert.deepStrictEqual(request.options, {
     strategy: 'timer',
     maxWait: 250,
@@ -350,7 +352,7 @@ test('lib/nats - should fail discovery without providers', async () => {
   nats.connection = createConnection();
 
   await assert.rejects(nats.discoverServices(), {
-    message: 'Service discovery failed: supportChat',
+    message: 'Service discovery failed',
   });
 });
 
