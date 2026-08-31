@@ -1,4 +1,6 @@
 ({
+  transports: ['http', 'ws'],
+
   parameters: {
     a: 'number',
     b: 'number',

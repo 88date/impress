@@ -12,6 +12,7 @@ const {
 const createProcedure = (exp, options = {}) => ({
   exports: exp,
   method: options.method,
+  transports: exp.transports,
   discovered: options.discovered || false,
 });
 
@@ -21,6 +22,7 @@ test('lib/documentation - should describe application interfaces', () => {
       caption: 'Add numbers',
       description: 'Returns the sum',
       protocols: ['http'],
+      transports: ['http'],
       roles: ['admin'],
       access: 'public',
       parameters: { a: 'number', b: 'number' },
@@ -46,6 +48,7 @@ test('lib/documentation - should describe application interfaces', () => {
           caption: 'Add numbers',
           description: 'Returns the sum',
           protocols: ['http'],
+          transports: ['http'],
           roles: ['admin'],
           access: 'public',
           parameters: { a: 'number', b: 'number' },
@@ -61,6 +64,7 @@ test('lib/documentation - should describe application interfaces', () => {
   const local = createProcedure(
     {
       caption: 'Send message',
+      transports: ['nats'],
       access: 'public',
       parameters: { text: 'string' },
       returns: 'string',
@@ -70,6 +74,7 @@ test('lib/documentation - should describe application interfaces', () => {
   const remote = createProcedure(
     {
       caption: 'Create conversation',
+      transports: ['nats'],
       access: 'logged',
       parameters: { userId: 'string' },
       returns: { conversationId: 'string' },
@@ -77,13 +82,14 @@ test('lib/documentation - should describe application interfaces', () => {
     { discovered: true },
   );
   const unavailable = createProcedure({ access: 'logged' });
-  const services = describeServices({
+  const serviceCollection = {
     chat: {
       default: 1,
       1: { sendMessage: local },
       2: { createConversation: remote, unavailable },
     },
-  });
+  };
+  const services = describeServices(serviceCollection);
 
   assert.deepStrictEqual(services, {
     chat: {
@@ -92,6 +98,7 @@ test('lib/documentation - should describe application interfaces', () => {
           caption: 'Send message',
           description: undefined,
           protocols: undefined,
+          transports: ['nats'],
           roles: undefined,
           access: 'public',
           parameters: { text: 'string' },
@@ -106,6 +113,7 @@ test('lib/documentation - should describe application interfaces', () => {
           caption: 'Create conversation',
           description: undefined,
           protocols: undefined,
+          transports: ['nats'],
           roles: undefined,
           access: 'logged',
           parameters: { userId: 'string' },
@@ -116,6 +124,15 @@ test('lib/documentation - should describe application interfaces', () => {
         },
       },
     },
+  });
+
+  const discovered = new Map([
+    ['chat', new Map([['1.sendMessage', local.exports]])],
+  ]);
+  const availableServices = describeServices(serviceCollection, discovered);
+
+  assert.deepStrictEqual(availableServices, {
+    chat: { 1: { sendMessage: services.chat[1].sendMessage } },
   });
 
   const schemas = describeSchemas(

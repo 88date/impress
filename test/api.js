@@ -1,6 +1,6 @@
 'use strict';
 
-const { test } = require('node:test');
+const { before, test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
 const metavm = require('metavm');
@@ -18,9 +18,14 @@ const application = {
   config: { server: { timeouts: {} } },
 };
 
-test('lib/api load - should load API correctly', async () => {
-  const api = new Api('api', application);
+let api = null;
+
+before(async () => {
+  api = new Api('api', application);
   await api.load();
+});
+
+test('lib/api load - should load API correctly', () => {
   const { example } = api.collection;
 
   assert.strictEqual(example.default, 1);
@@ -29,7 +34,7 @@ test('lib/api load - should load API correctly', async () => {
   assert.strictEqual(typeof add.method, 'function');
   assert.strictEqual(add.method.constructor.name, 'AsyncFunction');
 
-  const exportsKeys = ['parameters', 'method', 'returns'];
+  const exportsKeys = ['transports', 'parameters', 'method', 'returns'];
   assert.deepStrictEqual(Object.keys(add.exports), exportsKeys);
   assert.strictEqual(typeof add.script, 'function');
   assert.strictEqual(add.methodName, 'method');
@@ -48,4 +53,25 @@ test('lib/api load - should load API correctly', async () => {
   assert.strictEqual(add.deprecated, false);
   assert.strictEqual(add.assert, null);
   assert.strictEqual(add.examples, null);
+});
+
+test('lib/api load - should load transports', () => {
+  const example = Array.from(api.collection.example['1'].add.transports);
+  assert.deepStrictEqual(example, ['http', 'ws']);
+  const transports = api.collection.transports['1'];
+  assert.deepStrictEqual(Array.from(transports.centrifugo.transports), [
+    'centrifugo',
+  ]);
+  assert.deepStrictEqual(Array.from(transports.nats.transports), ['nats']);
+  assert.strictEqual(
+    typeof application.sandbox.api.transports.nats,
+    'function',
+  );
+});
+
+test('lib/api load - should load router without transports', () => {
+  const router = api.collection.health['1'].router;
+
+  assert.strictEqual(typeof router.method, 'function');
+  assert.deepStrictEqual(router.transports, []);
 });

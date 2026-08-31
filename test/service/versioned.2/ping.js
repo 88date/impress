@@ -1,5 +1,5 @@
 ({
-  service: true,
+  transports: ['nats'],
   access: 'public',
   timeout: 5000,
 

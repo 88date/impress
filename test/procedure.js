@@ -10,6 +10,7 @@ const contextStorage = new AsyncLocalStorage();
 
 test('lib/procedure - should create procedure correctly', async () => {
   const script = () => ({
+    transports: ['http', 'ws'],
     method: async ({ a, b }) => a + b,
   });
 
@@ -44,6 +45,7 @@ test('lib/procedure - should create procedure correctly', async () => {
   assert.strictEqual(typeof procedure.timeout, 'number');
   assert.strictEqual(procedure.serializer, null);
   assert.strictEqual(procedure.protocols, null);
+  assert.deepStrictEqual(procedure.transports, ['http', 'ws']);
   assert.strictEqual(procedure.deprecated, false);
   assert.strictEqual(procedure.assert, null);
   assert.strictEqual(procedure.examples, null);
@@ -52,8 +54,31 @@ test('lib/procedure - should create procedure correctly', async () => {
   assert.strictEqual(result, 10);
 });
 
+test('lib/procedure - should prepare transports', () => {
+  const application = {
+    contextStorage,
+    config: { server: { timeouts: {} } },
+  };
+
+  const defaultProcedure = new Procedure(
+    () => ({ method: async () => {} }),
+    'method',
+    application,
+  );
+  const restrictedProcedure = new Procedure(
+    () => ({ transports: ['centrifugo'], method: async () => {} }),
+    'method',
+    application,
+  );
+
+  assert.deepStrictEqual(defaultProcedure.transports, []);
+  assert.deepStrictEqual(restrictedProcedure.transports, ['centrifugo']);
+});
+
 test('lib/procedure - should validate procedure correctly', async () => {
   const script = () => ({
+    transports: ['http', 'ws'],
+
     validate: ({ a, b }) => {
       if (a % 3 === 0) throw new Error('Expected `a` to be multiple of 3');
       if (b % 5 === 0) throw new Error('Expected `b` to be multiple of 5');
@@ -87,6 +112,8 @@ test('lib/procedure - should validate procedure correctly', async () => {
 
 test('lib/procedure - should validate procedure async', async () => {
   const script = () => ({
+    transports: ['http', 'ws'],
+
     validate: async ({ a, b }) => {
       await metautil.delay(100);
       if (a % 3 === 0) {
@@ -124,6 +151,7 @@ test('lib/procedure - should handle timeout correctly', async () => {
   const DONE = 'success';
 
   const script = () => ({
+    transports: ['http', 'ws'],
     timeout: 100,
 
     method: async ({ waitTime }) =>
@@ -157,6 +185,8 @@ test('lib/procedure - should handle queue correctly', async () => {
   const DONE = 'success';
 
   const script = () => ({
+    transports: ['http', 'ws'],
+
     queue: {
       concurrency: 1,
       size: 1,
@@ -226,6 +256,7 @@ test('lib/procedure - should handle global timeouts.request', async () => {
   const DONE = 'success';
 
   const script = () => ({
+    transports: ['http', 'ws'],
     timeout: undefined,
 
     method: async ({ waitTime }) =>
@@ -254,6 +285,8 @@ test('lib/procedure - should handle global timeouts.request', async () => {
 
 test('lib/procedure - should preserve async context', async () => {
   const script = () => ({
+    transports: ['http', 'ws'],
+
     method: async ({ waitTime }) => {
       await metautil.delay(waitTime);
       return contextStorage.getStore().id;

@@ -48,9 +48,48 @@ test('lib/application - should expose documentation to sandbox', async () => {
 
   const { getDocumentation } = application.sandbox.application;
   assert.strictEqual(typeof getDocumentation, 'function');
+  let discoveryCalls = 0;
+  application.nats = {
+    discoverServices: async () => {
+      discoveryCalls++;
+      return new Map();
+    },
+  };
   const documentation = await getDocumentation();
+  await getDocumentation();
+  application.nats = null;
+
+  assert.strictEqual(discoveryCalls, 2);
   assert.deepStrictEqual(documentation.api, {});
   assert.deepStrictEqual(documentation.services, {});
   assert.strictEqual(typeof documentation.schemas, 'object');
   assert.deepStrictEqual(documentation.queues, {});
+});
+
+test('lib/application - should restrict methods by transport', () => {
+  const proc = { transports: ['centrifugo'] };
+  const hidden = { transports: [] };
+  application.api.collection.transport = {
+    default: 1,
+    1: { hidden, restricted: proc },
+  };
+
+  assert.strictEqual(
+    application.getMethod('transport', '*', 'restricted', 'centrifugo'),
+    proc,
+  );
+  assert.strictEqual(
+    application.getMethod('transport', '*', 'restricted', 'http'),
+    null,
+  );
+  assert.strictEqual(
+    application.getMethod('transport', '*', 'restricted', 'ws'),
+    null,
+  );
+  assert.strictEqual(
+    application.getMethod('transport', '*', 'hidden', 'http'),
+    null,
+  );
+
+  delete application.api.collection.transport;
 });

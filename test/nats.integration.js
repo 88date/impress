@@ -36,6 +36,7 @@ const createApplication = () => {
 
 const configureAction = (application, name, method) => {
   const script = (context) => ({
+    transports: ['nats'],
     access: 'logged',
     timeout: 2000,
     method: (args) => method(context, args),

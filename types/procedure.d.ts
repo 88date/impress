@@ -9,6 +9,7 @@ type Access = 'public' | 'session' | 'logged' | GroupAccess | UserAccess;
 type QueueParameters = { concurrency: number; size: number; timeout: number };
 type Serializer = 'json' | 'v8';
 type Protocols = 'http' | 'https' | 'ws' | 'wss';
+type Transport = 'http' | 'ws' | 'centrifugo' | 'nats';
 type AsyncFunction = (...args: Array<any>) => Promise<any>;
 type Example = {
   parameters: object;
@@ -30,7 +31,7 @@ interface Procedure {
   access?: Access;
   validate?: Function;
   timeout?: number;
-  service?: boolean;
+  transports: Array<Transport>;
   queue?: QueueParameters;
   serializer?: Serializer;
   protocols?: Array<Protocols>;

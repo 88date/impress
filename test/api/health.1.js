@@ -1,0 +1,5 @@
+({
+  async router() {
+    return 'ok';
+  },
+});

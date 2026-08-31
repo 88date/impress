@@ -1,5 +1,6 @@
 ({
-  service: false,
+  transports: ['http'],
+
   access: 'public',
 
   method: async () => 'disabled',

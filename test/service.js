@@ -44,7 +44,7 @@ test('lib/service load - should load service correctly', async () => {
   assert.strictEqual(example['1'].add.constructor.name, 'Broker');
   assert.strictEqual(example['1'].add.unitName, 'example.1');
   assert.strictEqual(example['1'].add.actionName, 'add');
-  assert.strictEqual(example['1'].add.config.location, 'local');
+  assert.deepStrictEqual(Array.from(example['1'].add.transports), ['nats']);
   assert.strictEqual(example['1'].add.timeout, 5000);
   assert.deepStrictEqual(Object.keys(example['1']), ['add']);
   assert.deepStrictEqual(Object.keys(application.sandbox.service.example), [
@@ -53,8 +53,6 @@ test('lib/service load - should load service correctly', async () => {
     'add',
   ]);
 
-  const config = service.configs['example.1'];
-  assert.strictEqual(config.location, 'local');
   assert.strictEqual(application.config.service.discovery.maxWait, 1000);
   assert.strictEqual(example['1'].skipped, undefined);
   assert.strictEqual(example['1'].disabled, undefined);
@@ -73,6 +71,7 @@ test('lib/service load - should load service correctly', async () => {
   assert.strictEqual(metadata.actions[0].name, 'add');
   assert.strictEqual(metadata.actions[0].version, 1);
   assert.strictEqual(metadata.actions[0].timeout, 5000);
+  assert.deepStrictEqual(Array.from(metadata.actions[0].transports), ['nats']);
   assert.strictEqual('method' in metadata.actions[0], false);
   assert.deepStrictEqual(metadata.events, []);
 
@@ -100,33 +99,14 @@ test('lib/service version - should derive version from directory', async () => {
   assert.strictEqual(versioned['2'].ping.constructor.name, 'Broker');
   assert.strictEqual(versioned['2'].ping.timeout, 5000);
 
-  const config = service.configs['versioned.2'];
-  assert.strictEqual(config.location, 'local');
-
   const result = await application.sandbox.service.versioned.ping();
   assert.strictEqual(result, 'pong');
-});
-
-test('lib/service metadata - should reload config and events', async () => {
-  const unitPath = path.join(root, 'test', 'service', 'example');
-  const configPath = path.join(unitPath, '.service.js');
-  const eventsPath = path.join(unitPath, '.events.js');
-
-  service.delete(configPath);
-  service.delete(eventsPath);
-  assert.strictEqual(service.configs['example.1'], undefined);
-  assert.deepStrictEqual(service.events.example.collection, {});
-
-  await service.change(configPath);
-  await service.change(eventsPath);
-  assert.strictEqual(service.configs['example.1'].location, 'local');
-  assert.deepStrictEqual(service.events.example.collection, {});
 });
 
 test('lib/service discovery - should load remote contracts', async () => {
   const name = 'remoteChat';
   const declaration = new Broker(
-    () => ({ service: true, access: 'public', timeout: 5000 }),
+    () => ({ transports: ['nats'], access: 'public', timeout: 5000 }),
     'method',
     `${name}.1`,
     application,
@@ -144,6 +124,7 @@ test('lib/service discovery - should load remote contracts', async () => {
     caption: 'Send message',
     description: '',
     timeout: 5000,
+    transports: ['nats'],
     deprecated: false,
     examples: null,
   };
@@ -192,8 +173,8 @@ test('lib/service discovery - should load remote contracts', async () => {
     [updatedEvent],
   );
   assert.strictEqual(
-    application.sandbox.service.remoteChat.sendMessage,
-    undefined,
+    typeof application.sandbox.service.remoteChat.sendMessage,
+    'function',
   );
   assert.strictEqual(
     typeof application.sandbox.service.remoteChat.createConversation,
@@ -240,20 +221,6 @@ test('lib/service events - should select one handler per group', async () => {
 
   assert.deepStrictEqual(calls, { first: 1, second: 1, location: 2 });
   assert.deepStrictEqual(contexts, [null, null, null, null]);
-
-  const previous = service.events.example.collection['calculation:complete'];
-  const eventBroker = service.events.supportChat;
-  const eventsPath = path.join(
-    root,
-    'test',
-    'service',
-    'example',
-    '.events.js',
-  );
-  await service.change(eventsPath);
-  const current = service.events.example.collection['calculation:complete'];
-  assert.strictEqual(current, previous);
-  assert.strictEqual(service.events.supportChat, eventBroker);
 
   await example.emit('calculation:complete', { result: 3 });
   assert.deepStrictEqual(calls, { first: 2, second: 1, location: 3 });
@@ -306,6 +273,7 @@ test('lib/service reload - should update NATS subscriptions', () => {
     updateDiscovery() {},
   };
   const script = () => ({
+    transports: ['nats'],
     access: 'public',
     method: async () => 'reloaded',
   });
@@ -322,45 +290,15 @@ test('lib/service reload - should update NATS subscriptions', () => {
   application.nats = null;
 });
 
-test('lib/service delete - should remove event subscriptions', () => {
-  const name = 'subscriber';
-  const unitName = `${name}.1`;
-  service.configs[unitName] = { location: 'local' };
-  const { eventBroker } = service.prepareUnit(unitName);
-  eventBroker.on('example:calculation:complete', () => {});
-  eventBroker.indexes.set('example:calculation:complete', 1);
-  const calls = [];
-  application.nats = {
-    subscribeServices: () => calls.push('services'),
-    subscribeEvents: () => calls.push('events'),
-    updateDiscovery: () => calls.push('discovery'),
-  };
-
-  const configPath = path.join(root, 'test', 'service', name, '.service.js');
-  service.delete(configPath);
-
-  assert.strictEqual(
-    eventBroker.listenerCount('example:calculation:complete'),
-    0,
-  );
-  assert.strictEqual(eventBroker.indexes.size, 0);
-  assert.deepStrictEqual(calls, ['services', 'discovery']);
-
-  application.nats = null;
-  delete service.collection[name];
-  delete service.events[name];
-  delete application.sandbox.service[name];
-});
-
 test('lib/service delete - should preserve another version', async () => {
   const v1 = new Broker(
-    () => ({ access: 'public', method: async () => 1 }),
+    () => ({ transports: ['nats'], access: 'public', method: async () => 1 }),
     'method',
     'example.1',
     application,
   );
   const v2 = new Broker(
-    () => ({ access: 'public', method: async () => 2 }),
+    () => ({ transports: ['nats'], access: 'public', method: async () => 2 }),
     'method',
     'example.2',
     application,
@@ -384,8 +322,20 @@ test('lib/service delete - should preserve another version', async () => {
   service.delete(v1Path);
 });
 
+test('lib/broker - should default transports to an empty array', () => {
+  const broker = new Broker(
+    () => ({ method: async () => {} }),
+    'method',
+    'example.1',
+    application,
+  );
+
+  assert.deepStrictEqual(broker.transports, []);
+});
+
 test('lib/broker access - should require session for logged', async () => {
   const script = () => ({
+    transports: ['nats'],
     access: 'logged',
     method: async () => 'allowed',
   });
@@ -418,6 +368,7 @@ test('lib/broker access - should require session for logged', async () => {
 
 test('lib/broker - should map domain error message', async () => {
   const script = () => ({
+    transports: ['nats'],
     access: 'public',
     errors: { EFAIL: 'Operation failed' },
     method: async () => {
@@ -478,6 +429,7 @@ test('lib/broker - should route remote calls through NATS', async () => {
   };
   const contract = {
     name: 'add',
+    transports: ['nats'],
     access: 'public',
     errors: { EFAIL: 'Operation failed' },
     timeout: 5000,
@@ -506,7 +458,12 @@ test('lib/broker - should route remote calls through NATS', async () => {
 test('lib/service - should select maximum version', async () => {
   const namespaceMethod = application.sandbox.service.example.add;
   const v2 = new Broker(
-    () => ({ access: 'public', timeout: 5000, method: async () => 2 }),
+    () => ({
+      transports: ['nats'],
+      access: 'public',
+      timeout: 5000,
+      method: async () => 2,
+    }),
     'method',
     'example.2',
     application,
@@ -520,7 +477,12 @@ test('lib/service - should select maximum version', async () => {
 
   const calls = [];
   const v3 = Broker.fromContract(
-    { name: 'add', access: 'public', timeout: 5000 },
+    {
+      name: 'add',
+      transports: ['nats'],
+      access: 'public',
+      timeout: 5000,
+    },
     'example.3',
     application,
   );

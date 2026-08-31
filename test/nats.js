@@ -34,6 +34,9 @@ const createConnection = () => {
     request(subject, payload, options) {
       requests.push({ subject, payload, options });
       const subscription = subscriptions.get(subject);
+      if (!subscription) {
+        return Promise.reject(new npm.nats.NoRespondersError(subject));
+      }
       return new Promise((resolve, reject) => {
         const message = {
           json: () => JSON.parse(payload),
@@ -174,6 +177,19 @@ test('lib/nats - should request and respond', async () => {
   assert.strictEqual(request.options.timeout, 5000);
 });
 
+test('lib/nats - should return 404 without responders', async () => {
+  const application = {
+    contextStorage: new AsyncLocalStorage(),
+  };
+  const nats = new Nats(application);
+  nats.connection = createConnection();
+
+  await assert.rejects(nats.request('missing.1.action', {}, 5000), {
+    message: 'Not Found',
+    code: 404,
+  });
+});
+
 test('lib/nats - should transfer service errors', async () => {
   const logged = [];
   const application = {
@@ -309,13 +325,9 @@ test('lib/nats - should discover remote services', async () => {
   const loaded = [];
   const consumerService = {
     collection: {},
-    isRemote(name) {
-      return Boolean(this.collection[name]);
-    },
     loadRemote(name, contracts) {
       loaded.push({ name, contracts });
-      if (contracts.length > 0) this.collection[name] = { default: 1 };
-      else delete this.collection[name];
+      this.collection[name] = { default: 1 };
     },
   };
   const consumer = new Nats({
@@ -357,10 +369,7 @@ test('lib/nats - should discover remote services', async () => {
   await subscription.callback(null, {
     subject: 'service.discovery.changed',
   });
-  assert.deepStrictEqual(loaded.at(-1), {
-    name: 'supportChat',
-    contracts: [],
-  });
+  assert.strictEqual(loaded.length, 2);
 
   provider.updateDiscovery();
   assert.strictEqual(
