@@ -11,7 +11,6 @@ const metavm = require('metavm');
 const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
-const { Planner } = require('./lib/planner.js');
 
 const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions', 'mq', 'service'];
 const PATH = process.cwd();
@@ -26,7 +25,6 @@ const CFG_OPTIONS = { mode: process.env.MODE, context: CONTEXT };
 const impress = {
   logger: null,
   config: null,
-  planner: null,
   close: () => {},
   finalization: false,
   initialization: true,
@@ -96,14 +94,6 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
       }
     },
 
-    task: async ({ action, port, task }) => {
-      const { planner } = impress;
-      task.app = app.path;
-      if (action === 'add') port.postMessage({ id: await planner.add(task) });
-      else if (action === 'remove') planner.remove(task.id);
-      else if (action === 'stop') planner.stop(task.name);
-    },
-
     invoke: async (msg) => {
       const { from, to, exclusive } = msg;
       if (to) {
@@ -171,9 +161,6 @@ const loadApplication = async (root, dir, master) => {
     logger.on('error', logError('Logger'));
     if (logger.active) impress.console = logger.console;
     impress.logger = logger;
-    const tasksPath = path.join(dir, 'tasks');
-    const tasksConfig = config.server.scheduler;
-    impress.planner = await new Planner(tasksPath, tasksConfig, impress);
     impress.config = config;
   }
   const { balancer, ports = [], workers = {} } = config.server;

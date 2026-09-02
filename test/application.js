@@ -46,8 +46,10 @@ test('lib/application - should expose documentation to sandbox', async () => {
   application.console = console;
   application.createSandbox();
 
-  const { getDocumentation } = application.sandbox.application;
+  const sandboxApplication = application.sandbox.application;
+  const { getDocumentation } = sandboxApplication;
   assert.strictEqual(typeof getDocumentation, 'function');
+  assert.strictEqual(sandboxApplication.scheduler, undefined);
   let discoveryCalls = 0;
   application.nats = {
     discoverServices: async () => {

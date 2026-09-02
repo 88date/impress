@@ -1,19 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { IncomingMessage, ServerResponse } from 'node:http';
 
-export interface Task {
-  name: string;
-  every: string;
-  args: object;
-  run: string;
-}
-
-export interface Scheduler {
-  add(task: Task): Promise<string>;
-  remove(id: string): void;
-  stop(name: string): void;
-}
-
 export interface InvokeTarget {
   method: string;
   args: object;
@@ -88,7 +75,6 @@ export interface Application extends EventEmitter {
   server: { host: string; port: number; protocol: string };
   resources: Static;
   schemas: Schemas;
-  scheduler: Scheduler;
   mode: string;
   introspect: (units: Array<string>) => Promise<object>;
   getDocumentation: () => Promise<ApplicationDocumentation>;

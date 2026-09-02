@@ -89,7 +89,7 @@ const res = await metacom.api.example.citiesByCountry({ countryId: 3 });
 - **Testing**: integrated node.js native test runner and table-test support
 - **Inter-process** communication and shared memory used for state management
 - **File utilities**: upload, download, support for partial content and streaming
-- **Task Management**: scheduled task execution at specific intervals or certain times
+- **Task Management**: BullMQ queues and scheduled job execution
 
 ## TODO list
 
