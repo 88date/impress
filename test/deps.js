@@ -13,6 +13,7 @@ test('lib/deps - should have correct dependencies structure', async () => {
   assert.strictEqual(typeof npm, 'object');
   assert.strictEqual(typeof npm.nats.connect, 'function');
   assert.strictEqual(typeof npm.nats.credsAuthenticator, 'function');
+  assert.strictEqual(typeof npm.pgboss.PgBoss, 'function');
   assert.strictEqual(typeof npm.ws, 'function');
   assert.strictEqual(typeof metarhia, 'object');
   assert.strictEqual(typeof metarhia.metaschema, 'object');

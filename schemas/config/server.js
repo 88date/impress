@@ -22,6 +22,10 @@
     wait: 'number',
     timeout: 'number',
   },
+  scheduler: {
+    enabled: 'boolean',
+    active: 'boolean',
+  },
   cors: {
     origin: '?string',
   },

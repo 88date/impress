@@ -11,6 +11,9 @@ const metavm = require('metavm');
 const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
+const { Pgboss } = require('./lib/pgboss.js');
+const { Scheduler } = require('./lib/scheduler.js');
+const { request } = require('./lib/thread.js');
 
 const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions', 'mq', 'service'];
 const PATH = process.cwd();
@@ -25,6 +28,8 @@ const CFG_OPTIONS = { mode: process.env.MODE, context: CONTEXT };
 const impress = {
   logger: null,
   config: null,
+  pgboss: null,
+  scheduler: null,
   close: () => {},
   finalization: false,
   initialization: true,
@@ -38,6 +43,7 @@ const exit = async (message, code) => {
   if (impress.finalization) return;
   impress.finalization = true;
   impress.console.info(message);
+  await impress.pgboss?.stop(impress.config?.server?.timeouts?.stop);
   if (impress.logger && impress.logger.active) await impress.logger.close();
   process.exit(code);
 };
@@ -57,12 +63,19 @@ const broadcast = (app, data) => {
   }
 };
 
+const requestWorker = async (path, pool, message) => {
+  const worker = await pool.next();
+  if (!worker) throw new Error(`No worker available for ${path}`);
+  return request(worker, message);
+};
+
 const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
   const workerData = { id, kind, root: app.root, path: app.path, port };
   const execArgv = [...process.execArgv, `--test-reporter=${REPORTER_PATH}`];
   const options = { trackUnmanagedFds: true, workerData, execArgv };
   const worker = new Worker(WORKER_PATH, options);
   if (kind === 'worker') {
+    if (app.tasksThreadId === null) app.tasksThreadId = id;
     app.pool.add(worker);
     await app.pool.capture();
   }
@@ -117,6 +130,21 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
       app.pool.release(worker);
     },
 
+    tasks: async ({ declarations, port }) => {
+      try {
+        if (app.tasksThreadId === id) {
+          await impress.scheduler.synchronize(declarations, app.executeTask);
+        }
+        port.postMessage({ status: 'done' });
+      } catch (error) {
+        const details = error?.stack || error?.message || String(error);
+        impress.console.error('Can not synchronize tasks', details);
+        port.postMessage({ error: { message: error.message } });
+      } finally {
+        port.close();
+      }
+    },
+
     terminate: ({ code }) => {
       process.emit('TERMINATE', code);
     },
@@ -162,11 +190,25 @@ const loadApplication = async (root, dir, master) => {
     if (logger.active) impress.console = logger.console;
     impress.logger = logger;
     impress.config = config;
+    impress.pgboss = new Pgboss(config.pgboss, impress.console);
+    await impress.pgboss.start();
+    impress.scheduler = new Scheduler(config.server.scheduler, impress.pgboss);
   }
   const { balancer, ports = [], workers = {} } = config.server;
   const threads = new Map();
   const pool = new Pool({ timeout: workers.wait });
-  const app = { root, path: dir, config, threads, pool, ready: 0 };
+  const executeTask = (declaration, job) =>
+    requestWorker(dir, pool, { name: 'task', declaration, job });
+  const app = {
+    root,
+    path: dir,
+    config,
+    threads,
+    pool,
+    ready: 0,
+    tasksThreadId: null,
+    executeTask,
+  };
   if (balancer) await startWorker(app, 'balancer', balancer);
   for (const port of ports) await startWorker(app, 'server', port);
   const poolSize = workers.pool || 0;
@@ -191,6 +233,7 @@ const loadApplications = async () => {
 };
 
 const stop = async (signal = 'SIGINT', code = 0) => {
+  await impress.pgboss?.stop(impress.config?.server?.timeouts?.stop);
   const portsClosed = new Promise((resolve) => {
     impress.console.info('Graceful shutdown in worker 0');
     const timeout = setTimeout(() => {

@@ -39,6 +39,7 @@ export interface ServerConfig {
     wait: number;
     timeout: number;
   };
+  scheduler: SchedulerConfig;
   cors?: {
     origin: string;
   };
@@ -58,6 +59,11 @@ export interface ServiceConfig {
   discovery: {
     maxWait: number;
   };
+}
+
+export interface SchedulerConfig {
+  enabled: boolean;
+  active: boolean;
 }
 
 export interface SessionsConfig {

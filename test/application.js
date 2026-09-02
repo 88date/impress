@@ -31,6 +31,7 @@ test('lib/application - should have correct application properties', () => {
   assert.strictEqual(application.lib.constructor.name, 'Code');
   assert.strictEqual(application.db.constructor.name, 'Code');
   assert.strictEqual(application.bus.constructor.name, 'Code');
+  assert.strictEqual(application.tasks.constructor.name, 'Tasks');
   assert.strictEqual(application.nats, null);
   assert.deepStrictEqual(application.starts, []);
   assert.strictEqual(application.config, null);
@@ -50,6 +51,7 @@ test('lib/application - should expose documentation to sandbox', async () => {
   const { getDocumentation } = sandboxApplication;
   assert.strictEqual(typeof getDocumentation, 'function');
   assert.strictEqual(sandboxApplication.scheduler, undefined);
+  assert.strictEqual(typeof application.sandbox.tasks, 'object');
   let discoveryCalls = 0;
   application.nats = {
     discoverServices: async () => {

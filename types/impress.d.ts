@@ -39,6 +39,7 @@ import * as _http2 from 'node:http2';
 import * as _dgram from 'node:dgram';
 
 import * as _ws from 'ws';
+import * as _pgboss from 'pg-boss';
 
 import * as _config from 'metaconfiguration';
 import * as _metautil from 'metautil';
@@ -49,10 +50,66 @@ import * as _metawatch from 'metawatch';
 import * as _metaschema from 'metaschema';
 import * as _metaconfiguration from 'metaconfiguration';
 
+type TaskJobOptions = Pick<
+  _pgboss.ScheduleOptions,
+  | 'priority'
+  | 'retryLimit'
+  | 'retryDelay'
+  | 'retryBackoff'
+  | 'retryDelayMax'
+  | 'expireInSeconds'
+  | 'retentionSeconds'
+  | 'deleteAfterSeconds'
+  | 'heartbeatSeconds'
+  | 'singletonKey'
+  | 'singletonSeconds'
+  | 'singletonNextSlot'
+  | 'group'
+  | 'deadLetter'
+  | 'tz'
+>;
+
+type TaskWorkerOptions = Pick<
+  _pgboss.WorkOptions,
+  | 'pollingIntervalSeconds'
+  | 'notifyPollingIntervalSeconds'
+  | 'burstWhenReadyExceeds'
+  | 'burstWhenBatchFull'
+  | 'orderByCreatedOn'
+  | 'minPriority'
+  | 'maxPriority'
+  | 'localConcurrency'
+  | 'localGroupConcurrency'
+  | 'groupConcurrency'
+  | 'heartbeatRefreshSeconds'
+>;
+
 declare global {
+  type TaskDeclaration<
+    Data extends object = Record<string, unknown>,
+    Result = unknown,
+  > = TaskJobOptions &
+    TaskWorkerOptions & {
+      cron: string;
+      data?: Data;
+      method: (
+        data: Data,
+        job: Omit<_pgboss.JobWithMetadata<Data>, 'signal'>,
+      ) => Result | Promise<Result>;
+      onCompleted?: (
+        result: Result,
+        job: Omit<_pgboss.JobWithMetadata<Data>, 'signal'>,
+      ) => void | Promise<void>;
+      onFailed?: (
+        reason: string,
+        job: Omit<_pgboss.JobWithMetadata<Data>, 'signal'>,
+      ) => void | Promise<void>;
+    };
+
   const application: Application;
   const context: Context;
   const service: Services;
+  const tasks: Record<string, TaskDeclaration>;
 
   namespace config {
     const log: LogConfig;
@@ -61,6 +118,7 @@ declare global {
     const sessions: SessionsConfig;
     const cache: CacheConfig;
     const service: ServiceConfig;
+    const pgboss: _pgboss.ConstructorOptions & { enabled: boolean };
   }
 
   namespace metarhia {
@@ -110,5 +168,6 @@ declare global {
 
   namespace npm {
     const ws: typeof _ws;
+    const pgboss: typeof _pgboss;
   }
 }

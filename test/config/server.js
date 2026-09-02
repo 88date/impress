@@ -22,6 +22,10 @@
     wait: 2000,
     timeout: 5000,
   },
+  scheduler: {
+    enabled: false,
+    active: false,
+  },
   cors: {
     origin: '*',
   },
