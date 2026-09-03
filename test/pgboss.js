@@ -2,7 +2,35 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { Pgboss } = require('../lib/pgboss.js');
+const { Pgboss, getPgbossConfig } = require('../lib/pgboss.js');
+
+test('lib/pgboss - should configure listener from scheduler mode', () => {
+  const config = Object.freeze({
+    enabled: true,
+    useListenNotify: false,
+    max: 5,
+  });
+  const scheduler = { enabled: true, active: false, notify: true };
+  const options = getPgbossConfig(config, scheduler);
+  const boss = new Pgboss(options);
+
+  assert.strictEqual(boss.enabled, true);
+  assert.strictEqual(boss.config.useListenNotify, true);
+  assert.strictEqual(boss.config.max, 5);
+  assert.strictEqual(config.useListenNotify, false);
+
+  for (const notify of [false, undefined]) {
+    const polling = getPgbossConfig(options, { enabled: true, notify });
+    assert.strictEqual(new Pgboss(polling).config.useListenNotify, false);
+  }
+});
+
+test('lib/pgboss - should preserve listener config when tasks are off', () => {
+  const config = { enabled: true, useListenNotify: true };
+
+  assert.deepStrictEqual(getPgbossConfig(config, { enabled: false }), config);
+  assert.deepStrictEqual(getPgbossConfig(config), config);
+});
 
 test('lib/pgboss - should be disabled by default', async () => {
   const boss = new Pgboss();

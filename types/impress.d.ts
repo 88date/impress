@@ -50,23 +50,20 @@ import * as _metawatch from 'metawatch';
 import * as _metaschema from 'metaschema';
 import * as _metaconfiguration from 'metaconfiguration';
 
+type TaskQueueOptions = Omit<_pgboss.UpdateQueueOptions, 'notify'> &
+  Pick<_pgboss.Queue, 'policy' | 'partition'>;
+
+type TaskScheduleOptions = Pick<_pgboss.ScheduleOptions, 'tz'> & {
+  cron: string;
+};
+
 type TaskJobOptions = Pick<
-  _pgboss.ScheduleOptions,
+  _pgboss.SendOptions,
   | 'priority'
-  | 'retryLimit'
-  | 'retryDelay'
-  | 'retryBackoff'
-  | 'retryDelayMax'
-  | 'expireInSeconds'
-  | 'retentionSeconds'
-  | 'deleteAfterSeconds'
-  | 'heartbeatSeconds'
   | 'singletonKey'
   | 'singletonSeconds'
   | 'singletonNextSlot'
   | 'group'
-  | 'deadLetter'
-  | 'tz'
 >;
 
 type TaskWorkerOptions = Pick<
@@ -88,9 +85,10 @@ declare global {
   type TaskDeclaration<
     Data extends object = Record<string, unknown>,
     Result = unknown,
-  > = TaskJobOptions &
-    TaskWorkerOptions & {
-      cron: string;
+  > = TaskQueueOptions &
+    TaskJobOptions &
+    TaskWorkerOptions &
+    TaskScheduleOptions & {
       data?: Data;
       method: (
         data: Data,

@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const assert = require('node:assert');
 const path = require('node:path');
-const { Tasks } = require('../lib/tasks.js');
+const { Tasks, declarations } = require('../lib/tasks.js');
 
 const root = process.cwd();
 const createApplication = () => ({
@@ -57,7 +57,8 @@ test('lib/tasks - should load tasks through Code', async () => {
       path: 'cleanup',
       cron: '0 3 * * *',
       data: { automatic: true },
-      options: { retryLimit: 2, tz: 'Europe/Moscow' },
+      queue: { retryLimit: 3 },
+      options: { priority: 1, tz: 'Europe/Moscow' },
       worker: { localConcurrency: 1 },
     },
     {
@@ -65,10 +66,35 @@ test('lib/tasks - should load tasks through Code', async () => {
       path: 'reports/daily',
       cron: '0 8 * * *',
       data: {},
+      queue: {},
       options: {},
       worker: {},
     },
   ]);
+});
+
+test('lib/tasks - should reject nested options and invalid tasks', () => {
+  const method = async () => {};
+  const cron = '0 3 * * *';
+  const cases = [
+    [{ method }, 'cron expected'],
+    [{ cron }, 'method expected'],
+    [{ cron, method, notify: true }, 'use server.scheduler.notify'],
+    [{ cron, method, notify: false }, 'use server.scheduler.notify'],
+    [{ cron, method, queue: { retryLimit: 3 } }, 'queue must be flattened'],
+    [{ cron, method, job: { priority: 1 } }, 'job must be flattened'],
+    [
+      { cron, method, worker: { localConcurrency: 2 } },
+      'worker must be flattened',
+    ],
+    [{ method, schedule: { cron } }, 'schedule must be flattened'],
+  ];
+
+  for (const [unit, reason] of cases) {
+    assert.throws(() => declarations({ cleanup: unit }), {
+      message: `Task "cleanup": ${reason}`,
+    });
+  }
 });
 
 test('lib/tasks - should update declarations after deletion', async () => {

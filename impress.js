@@ -11,7 +11,7 @@ const metavm = require('metavm');
 const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
-const { Pgboss } = require('./lib/pgboss.js');
+const { Pgboss, getPgbossConfig } = require('./lib/pgboss.js');
 const { Scheduler } = require('./lib/scheduler.js');
 const { request } = require('./lib/thread.js');
 
@@ -190,7 +190,8 @@ const loadApplication = async (root, dir, master) => {
     if (logger.active) impress.console = logger.console;
     impress.logger = logger;
     impress.config = config;
-    impress.pgboss = new Pgboss(config.pgboss, impress.console);
+    const pgboss = getPgbossConfig(config.pgboss, config.server.scheduler);
+    impress.pgboss = new Pgboss(pgboss, impress.console);
     await impress.pgboss.start();
     impress.scheduler = new Scheduler(config.server.scheduler, impress.pgboss);
   }

@@ -18,6 +18,17 @@ test('schemas/config - should validate config schemas correctly', async () => {
 
   const server = await loadSchema('./schemas/config/server.js');
   assert.strictEqual(server.check(config.server).valid, true);
+  const scheduler = { enabled: true, active: false };
+  assert.strictEqual(server.check({ ...config.server, scheduler }).valid, true);
+  for (const notify of [true, false]) {
+    const options = { ...config.server, scheduler: { ...scheduler, notify } };
+    assert.strictEqual(server.check(options).valid, true);
+  }
+  const invalid = {
+    ...config.server,
+    scheduler: { ...scheduler, notify: 'true' },
+  };
+  assert.strictEqual(server.check(invalid).valid, false);
 
   const sessions = await loadSchema('./schemas/config/sessions.js');
   assert.strictEqual(sessions.check(config.sessions).valid, true);

@@ -25,6 +25,7 @@
   scheduler: {
     enabled: false,
     active: false,
+    notify: false,
   },
   cors: {
     origin: '*',

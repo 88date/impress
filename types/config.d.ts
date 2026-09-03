@@ -64,6 +64,8 @@ export interface ServiceConfig {
 export interface SchedulerConfig {
   enabled: boolean;
   active: boolean;
+  /** Enable LISTEN/NOTIFY for tasks; false uses polling. Defaults to false. */
+  notify?: boolean;
 }
 
 export interface SessionsConfig {

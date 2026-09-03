@@ -25,6 +25,7 @@
   scheduler: {
     enabled: 'boolean',
     active: 'boolean',
+    notify: '?boolean',
   },
   cors: {
     origin: '?string',
