@@ -504,3 +504,91 @@ test('lib/service - should select maximum version', async () => {
   service.delete(v3Path);
   service.delete(v2Path);
 });
+
+test('lib/service - should select an explicit local version', async () => {
+  const localApplication = {
+    ...application,
+    sandbox: { service: {} },
+    nats: null,
+  };
+  const localService = new Service('service', localApplication);
+  localApplication.service = localService;
+  for (const version of [1, 2]) {
+    const unitName = `example.${version}`;
+    const script = () => ({
+      transports: ['nats'],
+      access: 'public',
+      method: async (args) => ({ version, args }),
+    });
+    const broker = new Broker(script, 'method', unitName, localApplication);
+    localService.changeUnit(unitName, 'echo', broker);
+    if (version === 1) {
+      const legacy = new Broker(script, 'method', unitName, localApplication);
+      localService.changeUnit(unitName, 'legacy', legacy);
+    }
+  }
+  const { echo, legacy } = localApplication.sandbox.service.example;
+  const args = { value: 42 };
+
+  assert.deepStrictEqual(await echo(args, { version: 1 }), {
+    version: 1,
+    args,
+  });
+  assert.deepStrictEqual(await echo(args), { version: 2, args });
+  assert.deepStrictEqual(await echo(args, {}), { version: 2, args });
+  assert.deepStrictEqual(await legacy(args, { version: 1 }), {
+    version: 1,
+    args,
+  });
+  await assert.rejects(legacy(args, { version: 2 }), {
+    message: 'Service action is not available: example.2.legacy',
+  });
+  await assert.rejects(echo(args, { version: 3 }), {
+    message: 'Service action is not available: example.3.echo',
+  });
+});
+
+test('lib/service - should pin remote versions across updates', async () => {
+  const calls = [];
+  const remoteApplication = {
+    ...application,
+    sandbox: { service: {} },
+    nats: {
+      subscribeService() {},
+      request: async (...args) => {
+        calls.push(args);
+        return 'sent';
+      },
+    },
+  };
+  const remoteService = new Service('service', remoteApplication);
+  remoteApplication.service = remoteService;
+  const contract = {
+    name: 'echo',
+    version: 1,
+    transports: ['nats'],
+    access: 'public',
+    timeout: 5000,
+  };
+  remoteService.loadRemote('example', [contract]);
+  const { echo } = remoteApplication.sandbox.service.example;
+  const args = { value: 42 };
+  await echo(args, { version: 1 });
+
+  remoteService.loadRemote('example', [contract, { ...contract, version: 2 }]);
+  await echo(args, { version: 1 });
+  await echo(args, { version: 2 });
+  await echo(args);
+  await echo(args, {});
+  await assert.rejects(echo(args, { version: 3 }), {
+    message: 'Service action is not available: example.3.echo',
+  });
+
+  assert.deepStrictEqual(calls, [
+    ['example.1.echo', args, 5000],
+    ['example.1.echo', args, 5000],
+    ['example.2.echo', args, 5000],
+    ['example.2.echo', args, 5000],
+    ['example.2.echo', args, 5000],
+  ]);
+});

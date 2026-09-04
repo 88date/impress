@@ -11,6 +11,7 @@ const metavm = require('metavm');
 const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
+const { ServiceCatalog } = require('./lib/catalog.js');
 const { Pgboss, getPgbossConfig } = require('./lib/pgboss.js');
 const { Scheduler } = require('./lib/scheduler.js');
 const { request } = require('./lib/thread.js');
@@ -70,7 +71,15 @@ const requestWorker = async (path, pool, message) => {
 };
 
 const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
-  const workerData = { id, kind, root: app.root, path: app.path, port };
+  const discoveryLoader = app.catalog.register(id, kind);
+  const workerData = {
+    id,
+    kind,
+    root: app.root,
+    path: app.path,
+    port,
+    discoveryLoader,
+  };
   const execArgv = [...process.execArgv, `--test-reporter=${REPORTER_PATH}`];
   const options = { trackUnmanagedFds: true, workerData, execArgv };
   const worker = new Worker(WORKER_PATH, options);
@@ -128,6 +137,19 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
 
     release: () => {
       app.pool.release(worker);
+    },
+
+    catalogRequest: () => app.catalog.send(worker),
+
+    catalogUpdate: ({ services, port }) => {
+      try {
+        const snapshot = app.catalog.publish(worker, services);
+        port.postMessage({ result: snapshot });
+      } catch (error) {
+        port.postMessage({ error: { message: error.message } });
+      } finally {
+        port.close();
+      }
     },
 
     tasks: async ({ declarations, port }) => {
@@ -205,6 +227,7 @@ const loadApplication = async (root, dir, master) => {
     path: dir,
     config,
     threads,
+    catalog: new ServiceCatalog(threads, config.server),
     pool,
     ready: 0,
     tasksThreadId: null,

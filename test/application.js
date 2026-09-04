@@ -52,10 +52,10 @@ test('lib/application - should expose documentation to sandbox', async () => {
   assert.strictEqual(typeof getDocumentation, 'function');
   assert.strictEqual(sandboxApplication.scheduler, undefined);
   assert.strictEqual(typeof application.sandbox.tasks, 'object');
-  let discoveryCalls = 0;
+  let catalogReads = 0;
   application.nats = {
-    discoverServices: async () => {
-      discoveryCalls++;
+    getCatalog: async () => {
+      catalogReads++;
       return new Map();
     },
   };
@@ -63,7 +63,7 @@ test('lib/application - should expose documentation to sandbox', async () => {
   await getDocumentation();
   application.nats = null;
 
-  assert.strictEqual(discoveryCalls, 2);
+  assert.strictEqual(catalogReads, 2);
   assert.deepStrictEqual(documentation.api, {});
   assert.deepStrictEqual(documentation.services, {});
   assert.strictEqual(typeof documentation.schemas, 'object');

@@ -52,6 +52,43 @@ You can call it from client-side:
 const res = await metacom.api.example.citiesByCountry({ countryId: 3 });
 ```
 
+## NATS RPC worker roles
+
+With `config.service.enabled`, every application worker opens its own NATS
+connection. All workers can make outgoing RPC calls directly through NATS.
+
+Only workers with `kind: 'server'` subscribe to API methods whose `transports`
+include `'nats'`, answer discovery requests, and announce their service catalog.
+Regular workers and balancers act as RPC clients. This rule also applies after
+reconnection and when API files are reloaded.
+
+Incoming NATS RPC handlers execute in the receiving server worker. If there are
+multiple server workers, their subscriptions share a queue group for each
+method. Configure at least one `server.ports` entry on an application that must
+serve NATS RPC. Applications without server workers can call remote providers.
+
+API methods remain available for local calls in every application worker.
+One worker per application fetches the remote service catalog and listens for
+discovery changes: the first server worker, or a regular worker if there are no
+server workers, or the balancer if it is the only worker. The master caches the
+catalog and distributes versioned snapshots to all application workers.
+
+Workers wait for their first catalog within `server.timeouts.start`. Late and
+restarted workers receive the cached snapshot. The discovery worker resumes
+updates after its automatic restart; cached catalogs remain available during
+that restart. Documentation uses the local catalog without a new NATS query.
+
+Service calls use the highest known service version by default. To select a
+specific version, pass it in the second argument:
+
+```js
+await service.profile.get({ id });
+await service.profile.get({ id }, { version: 1 });
+```
+
+An explicit version applies to both local and remote calls. If that version or
+method is unavailable, the call fails without falling back to another version.
+
 ## Metarhia and impress application server way
 
 - Applied code needs to be simple and secure, so we use sandboxing with v8

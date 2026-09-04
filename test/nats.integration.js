@@ -13,8 +13,9 @@ const servers = process.env.NATS_TEST_SERVERS;
 const credentials = process.env.NATS_TEST_CREDENTIALS;
 const skip = !servers || !credentials;
 
-const createApplication = () => {
+const createApplication = (kind) => {
   const application = {
+    kind,
     sandbox: metavm.createContext({ service: {} }),
     console,
     contextStorage: new AsyncLocalStorage(),
@@ -61,8 +62,8 @@ test(
   'lib/nats integration - should call actions and deliver events',
   { skip, timeout: 10000 },
   async (testContext) => {
-    const provider = createApplication();
-    const consumer = createApplication();
+    const provider = createApplication('server');
+    const consumer = createApplication('worker');
     const echo = (context, args) => ({
       value: args.value,
       session: context.session,
@@ -83,6 +84,10 @@ test(
     });
     await provider.nats.start();
     await consumer.nats.start();
+
+    assert.strictEqual(provider.nats.serviceSubscriptions.size, 2);
+    assert.strictEqual(consumer.nats.serviceSubscriptions.size, 0);
+    assert.strictEqual(consumer.nats.discoveryCatalogSubscription, null);
 
     const session = {
       token: 'integration-token',
