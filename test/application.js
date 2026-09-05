@@ -32,7 +32,12 @@ test('lib/application - should have correct application properties', () => {
   assert.strictEqual(application.db.constructor.name, 'Code');
   assert.strictEqual(application.bus.constructor.name, 'Code');
   assert.strictEqual(application.tasks.constructor.name, 'Tasks');
+  assert.strictEqual(application.eventPublisher, null);
+  assert.strictEqual(application.subscriptions, null);
+  assert.strictEqual(application.events, null);
+  assert.strictEqual(application.subscribers, null);
   assert.strictEqual(application.nats, null);
+  assert.strictEqual(application.pgboss, null);
   assert.deepStrictEqual(application.starts, []);
   assert.strictEqual(application.config, null);
   assert.strictEqual(application.logger, null);
@@ -68,6 +73,7 @@ test('lib/application - should expose documentation to sandbox', async () => {
   assert.deepStrictEqual(documentation.services, {});
   assert.strictEqual(typeof documentation.schemas, 'object');
   assert.deepStrictEqual(documentation.queues, {});
+  assert.deepStrictEqual(documentation.events, []);
 });
 
 test('lib/application - should restrict methods by transport', () => {
@@ -96,4 +102,47 @@ test('lib/application - should restrict methods by transport', () => {
   );
 
   delete application.api.collection.transport;
+});
+
+test('lib/application - documentation includes event catalogs', async (t) => {
+  const remote = {
+    name: 'chat:1:created',
+    subject: 'chat.1.created',
+    caption: 'Remote event',
+    description: '',
+    examples: null,
+  };
+  const local = {
+    ...remote,
+    caption: 'Local event',
+    transports: ['local', 'nats'],
+  };
+  const another = {
+    ...remote,
+    name: 'profile:1:updated',
+    subject: 'profile.1.updated',
+  };
+  application.nats = {
+    getCatalog: async () => new Map(),
+    eventCatalog: new Map([
+      [remote.name, remote],
+      [another.name, another],
+    ]),
+  };
+  application.subscriptions = {
+    describeEvents: ({ natsOnly }) => {
+      assert.strictEqual(natsOnly, false);
+      return [local];
+    },
+  };
+  t.after(() => {
+    application.nats = null;
+    application.subscriptions = null;
+  });
+
+  const documentation = await application.getDocumentation();
+  assert.deepStrictEqual(documentation.events, [
+    { ...local, origin: 'local' },
+    { ...another, transports: ['nats'], origin: 'remote' },
+  ]);
 });

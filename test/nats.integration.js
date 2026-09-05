@@ -8,6 +8,12 @@ const { DomainError } = require('metautil');
 const { Broker } = require('../lib/broker.js');
 const { Nats } = require('../lib/nats.js');
 const { Service } = require('../lib/service.js');
+const {
+  EventPublisher,
+  SubscriptionManager,
+  PgbossSubscriptions,
+  NatsSubscriptions,
+} = require('../lib/events/index.js');
 
 const servers = process.env.NATS_TEST_SERVERS;
 const credentials = process.env.NATS_TEST_CREDENTIALS;
@@ -20,12 +26,14 @@ const createApplication = (kind) => {
     console,
     contextStorage: new AsyncLocalStorage(),
     config: {
-      service: {
-        servers,
-        credentials,
-        discovery: { maxWait: 1000 },
+      server: {
+        nats: {
+          servers,
+          credentials,
+          discovery: { maxWait: 1000 },
+        },
+        timeouts: { request: 2000 },
       },
-      server: { timeouts: { request: 2000 } },
     },
     nats: null,
     schemas: null,
@@ -46,18 +54,6 @@ const configureAction = (application, name, method) => {
   application.service.changeUnit('integration.1', name, broker);
 };
 
-const configureEvents = (application, source = true) => {
-  if (source) {
-    const { eventBroker } = application.service.prepareUnit('integration.1');
-    eventBroker.load({
-      completed: {
-        parameters: { value: 'number' },
-      },
-    });
-  }
-  application.service.prepareUnit('audit.1');
-};
-
 test(
   'lib/nats integration - should call actions and deliver events',
   { skip, timeout: 10000 },
@@ -73,8 +69,6 @@ test(
     };
     configureAction(provider, 'echo', echo);
     configureAction(provider, 'fail', fail);
-    configureEvents(provider);
-    configureEvents(consumer, false);
 
     provider.nats = new Nats(provider);
     consumer.nats = new Nats(consumer);
@@ -94,7 +88,7 @@ test(
       state: { userId: 'user-1' },
     };
     const context = { session };
-    const { integration, audit } = consumer.sandbox.service;
+    const { integration } = consumer.sandbox.service;
     const result = await consumer.contextStorage.run(context, () =>
       integration.echo({ value: 42 }),
     );
@@ -105,14 +99,32 @@ test(
       { code: 'E_INTEGRATION' },
     );
 
-    const received = new Promise((resolve) => {
-      audit.on('integration:completed', resolve);
+    const publisher = new EventPublisher(null, provider.nats);
+    const subscriptions = new SubscriptionManager(
+      publisher,
+      new PgbossSubscriptions(null),
+      new NatsSubscriptions(provider.nats),
+    );
+    const received = Promise.withResolvers();
+    await subscriptions.registerEvent({
+      eventName: 'integration:1:completed',
+      eventSubject: 'integration.1.completed',
+      transports: ['nats'],
     });
-    await consumer.nats.connection.flush();
-    await provider.sandbox.service.integration.emit('completed', {
-      value: 42,
+    await subscriptions.registerSubscriber({
+      subscriberName: 'audit:1:completed',
+      eventName: 'integration:1:completed',
+      method: (data, event) => received.resolve({ data, event }),
     });
-
-    assert.deepStrictEqual(await received, { value: 42 });
+    await subscriptions.start();
+    try {
+      await provider.nats.connection.flush();
+      const id = await publisher.emit('integration:1:completed', { value: 42 });
+      const message = await received.promise;
+      assert.deepStrictEqual(message.data, { value: 42 });
+      assert.strictEqual(message.event.id, id);
+    } finally {
+      await subscriptions.stop();
+    }
   },
 );

@@ -118,9 +118,7 @@ await mq.push.queue.addBulk([
 await mq.push.flow({
   name: 'welcome',
   data: { step: 'final' },
-  children: [
-    { name: 'promo', queueName: 'push', data: { step: 1 } },
-  ],
+  children: [{ name: 'promo', queueName: 'push', data: { step: 1 } }],
 });
 ```
 
@@ -130,7 +128,11 @@ The framework maps it to BullMQ's `tz` repeat option.
 ### Schedules (dynamic)
 
 ```js
-await mq.push.queue.upsertJobScheduler('newTask', { every: 60000 }, { data: {} });
+await mq.push.queue.upsertJobScheduler(
+  'newTask',
+  { every: 60000 },
+  { data: {} },
+);
 await mq.push.queue.upsertJobScheduler(
   'dailyReport',
   { pattern: '0 15 3 * * *', tz: 'Europe/Moscow' },
@@ -150,8 +152,8 @@ const status = await mq.getStatus();
 ### Direct BullMQ access
 
 ```js
-mq.push.queue    // Queue instance
-mq.push.worker   // Worker instance (null on server threads)
+mq.push.queue; // Queue instance
+mq.push.worker; // Worker instance (null on server threads)
 ```
 
 ## Redis config - `config/mq.js`

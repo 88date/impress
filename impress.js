@@ -11,12 +11,16 @@ const metavm = require('metavm');
 const { Pool, isError } = require('metautil');
 const { loadSchema } = require('metaschema');
 const { Logger } = require('metalog');
-const { ServiceCatalog } = require('./lib/catalog.js');
+const {
+  ServiceCatalog,
+  EventCatalog,
+  DiscoveryWorker,
+} = require('./lib/catalog.js');
 const { Pgboss, getPgbossConfig } = require('./lib/pgboss.js');
 const { Scheduler } = require('./lib/scheduler.js');
 const { request } = require('./lib/thread.js');
 
-const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions', 'mq', 'service'];
+const CONFIG_SECTIONS = ['log', 'scale', 'server', 'sessions', 'mq'];
 const PATH = process.cwd();
 const WORKER_PATH = path.join(__dirname, 'lib/worker.js');
 const REPORTER_PATH = 'file://' + path.join(__dirname, 'lib/reporter.js');
@@ -71,7 +75,7 @@ const requestWorker = async (path, pool, message) => {
 };
 
 const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
-  const discoveryLoader = app.catalog.register(id, kind);
+  const discoveryLoader = app.discoveryWorker.register(id, kind);
   const workerData = {
     id,
     kind,
@@ -152,6 +156,19 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
       }
     },
 
+    eventCatalogRequest: () => app.eventCatalog.send(worker),
+
+    eventCatalogUpdate: ({ events, port }) => {
+      try {
+        const snapshot = app.eventCatalog.publish(worker, events);
+        port.postMessage({ result: snapshot });
+      } catch (error) {
+        port.postMessage({ error: { message: error.message } });
+      } finally {
+        port.close();
+      }
+    },
+
     tasks: async ({ declarations, port }) => {
       try {
         if (app.tasksThreadId === id) {
@@ -212,7 +229,10 @@ const loadApplication = async (root, dir, master) => {
     if (logger.active) impress.console = logger.console;
     impress.logger = logger;
     impress.config = config;
-    const pgboss = getPgbossConfig(config.pgboss, config.server.scheduler);
+    const pgboss = getPgbossConfig(
+      config.server.pgboss,
+      config.server.scheduler,
+    );
     impress.pgboss = new Pgboss(pgboss, impress.console);
     await impress.pgboss.start();
     impress.scheduler = new Scheduler(config.server.scheduler, impress.pgboss);
@@ -220,6 +240,9 @@ const loadApplication = async (root, dir, master) => {
   const { balancer, ports = [], workers = {} } = config.server;
   const threads = new Map();
   const pool = new Pool({ timeout: workers.wait });
+  const discoveryWorker = new DiscoveryWorker(threads, config.server);
+  const catalog = new ServiceCatalog(threads, discoveryWorker);
+  const eventCatalog = new EventCatalog(threads, discoveryWorker);
   const executeTask = (declaration, job) =>
     requestWorker(dir, pool, { name: 'task', declaration, job });
   const app = {
@@ -227,7 +250,9 @@ const loadApplication = async (root, dir, master) => {
     path: dir,
     config,
     threads,
-    catalog: new ServiceCatalog(threads, config.server),
+    discoveryWorker,
+    catalog,
+    eventCatalog,
     pool,
     ready: 0,
     tasksThreadId: null,

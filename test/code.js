@@ -25,7 +25,7 @@ test('lib/code - should load code correctly', async () => {
   assert.deepStrictEqual(code.tree, {});
 
   await code.load();
-  assert.deepStrictEqual(Object.keys(code.tree), ['example', 'utils']);
+  assert.deepStrictEqual(Object.keys(code.tree).sort(), ['example', 'utils']);
   assert.strictEqual(code.tree.example.parent, code.tree);
   assert.strictEqual(typeof code.tree.example.add, 'object');
   assert.strictEqual(typeof code.tree.example.doSomething, 'function');

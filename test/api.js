@@ -42,7 +42,8 @@ test('lib/api load - should load API correctly', () => {
   assert.strictEqual(add.parameters.constructor.name, 'Schema');
   assert.strictEqual(add.returns.constructor.name, 'Schema');
   assert.strictEqual(add.errors, null);
-  assert.strictEqual(add.semaphore, null);
+  assert.ok(add.locks instanceof Map);
+  assert.strictEqual(add.locks.size, 0);
   assert.strictEqual(add.caption, '');
   assert.strictEqual(add.description, '');
   assert.strictEqual(add.access, '');

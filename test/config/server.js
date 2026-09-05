@@ -27,6 +27,26 @@
     active: false,
     notify: false,
   },
+  pubsub: {
+    active: false,
+  },
+  nats: {
+    enabled: false,
+    servers: 'nats://127.0.0.1:4222',
+    credentials: 'test.creds',
+    discovery: {
+      maxWait: 1000,
+    },
+  },
+  pgboss: {
+    enabled: false,
+    logEvents: ['error', 'warning'],
+    connectionString: 'postgres://127.0.0.1/impress',
+    max: 5,
+  },
+  centrifugo: {
+    secret: 'test-secret',
+  },
   cors: {
     origin: '*',
   },

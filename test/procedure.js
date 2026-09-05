@@ -37,7 +37,8 @@ test('lib/procedure - should create procedure correctly', async () => {
   assert.strictEqual(procedure.parameters, null);
   assert.strictEqual(procedure.returns, null);
   assert.strictEqual(procedure.errors, null);
-  assert.strictEqual(procedure.semaphore, null);
+  assert.ok(procedure.locks instanceof Map);
+  assert.strictEqual(procedure.locks.size, 0);
   assert.strictEqual(procedure.caption, '');
   assert.strictEqual(procedure.description, '');
   assert.strictEqual(procedure.access, '');
@@ -250,6 +251,65 @@ test('lib/procedure - should handle queue correctly', async () => {
     if (last.status === 'rejected') throw last.reason;
     return last.value;
   }, new Error('Semaphore queue is full'));
+});
+
+test('lib/procedure - should preserve queue limits after handoff', async () => {
+  const script = () => ({
+    queue: { concurrency: 1, size: 1, timeout: 1000 },
+    method: async () => {},
+  });
+  const application = {
+    semaphore: new metautil.Semaphore({ concurrency: 3 }),
+    config: { server: { timeouts: {} } },
+  };
+  const procedure = new Procedure(script, 'method', application);
+  const ip = '127.0.0.1';
+
+  await procedure.enter(ip);
+  const waiting = procedure.enter(ip);
+  await new Promise(setImmediate);
+  procedure.leave(ip);
+  await waiting;
+
+  let entered = false;
+  const next = procedure.enter(ip).then(() => {
+    entered = true;
+  });
+  await new Promise(setImmediate);
+  assert.strictEqual(entered, false);
+
+  procedure.leave(ip);
+  await next;
+  procedure.leave(ip);
+  assert.strictEqual(procedure.locks.size, 0);
+  assert.strictEqual(application.semaphore.empty, true);
+});
+
+test('lib/procedure - should retain limits while requests run', async () => {
+  const script = () => ({
+    queue: { concurrency: 2, size: 0, timeout: 1000 },
+    method: async () => {},
+  });
+  const application = {
+    semaphore: new metautil.Semaphore({ concurrency: 3 }),
+    config: { server: { timeouts: {} } },
+  };
+  const procedure = new Procedure(script, 'method', application);
+  const ip = '127.0.0.1';
+
+  await procedure.enter(ip);
+  await procedure.enter(ip);
+  procedure.leave(ip);
+  await procedure.enter(ip);
+
+  await assert.rejects(procedure.enter(ip), {
+    message: 'Semaphore queue is full',
+  });
+
+  procedure.leave(ip);
+  procedure.leave(ip);
+  assert.strictEqual(procedure.locks.size, 0);
+  assert.strictEqual(application.semaphore.empty, true);
 });
 
 test('lib/procedure - should handle global timeouts.request', async () => {

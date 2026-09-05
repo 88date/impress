@@ -7,8 +7,12 @@ const { MessageChannel } = require('node:worker_threads');
 const { Error } = require('metautil');
 const { npm } = require('../lib/deps.js');
 const { Broker } = require('../lib/broker.js');
-const { ServiceCatalog } = require('../lib/catalog.js');
-const { Nats } = require('../lib/nats.js');
+const { ServiceCatalog, DiscoveryWorker } = require('../lib/catalog.js');
+const {
+  Nats,
+  EVENT_DISCOVERY_SUBJECT,
+  EVENT_DISCOVERY_CHANGED_SUBJECT,
+} = require('../lib/nats.js');
 const { Service } = require('../lib/service.js');
 
 const matches = (pattern, subject) => {
@@ -99,8 +103,10 @@ const createApplication = (kind) => {
     contextStorage: new AsyncLocalStorage(),
     sandbox: { service: {} },
     config: {
-      service: { discovery: { maxWait: 100 } },
-      server: { timeouts: { start: 1000, request: 1000 } },
+      server: {
+        nats: { discovery: { maxWait: 100 } },
+        timeouts: { start: 1000, request: 1000 },
+      },
     },
     absolute: (name) => name,
   };
@@ -120,7 +126,7 @@ test('lib/nats - should load NATS transport', () => {
 });
 
 test('lib/nats - should require configuration', async () => {
-  const application = { config: { service: { enabled: true } } };
+  const application = { config: { server: { nats: { enabled: true } } } };
   const nats = new Nats(application);
   await assert.rejects(() => nats.start(), {
     message: 'NATS servers and credentials expected',
@@ -238,7 +244,10 @@ test(
   { timeout: 5000 },
   async (t) => {
     const threads = new Map();
-    const master = new ServiceCatalog(threads, { ports: [8000, 8001] });
+    const discoveryWorker = new DiscoveryWorker(threads, {
+      ports: [8000, 8001],
+    });
+    const master = new ServiceCatalog(threads, discoveryWorker);
     let gate = Promise.withResolvers();
     const services = [
       {
@@ -255,7 +264,7 @@ test(
       const application = createApplication(kind);
       addAction(application, 'local', async () => kind);
       const discovery = {
-        loader: master.register(id, kind),
+        loader: discoveryWorker.register(id, kind),
         request: () => master.send(port1),
         publish: async (services) =>
           structuredClone(master.publish(port1, structuredClone(services))),
@@ -736,6 +745,7 @@ test('lib/nats - should subscribe local services', async () => {
   };
   const nats = new Nats(application);
   const subscriptions = [];
+  nats.connection = createConnection();
   nats.subscribe = (subject, handler) => {
     const subscription = {
       subject,
@@ -796,7 +806,7 @@ test('lib/nats - should discover remote services', async () => {
   const provider = new Nats({
     kind: 'server',
     console: { error() {} },
-    config: { service: { discovery: { maxWait: 250 } } },
+    config: { server: { nats: { discovery: { maxWait: 250 } } } },
     service: {
       collection: { supportChat: { default: 1 } },
       isRemote: () => false,
@@ -814,7 +824,7 @@ test('lib/nats - should discover remote services', async () => {
   const consumer = new Nats({
     kind: 'worker',
     console: { error() {} },
-    config: { service: { discovery: { maxWait: 250 } } },
+    config: { server: { nats: { discovery: { maxWait: 250 } } } },
     service: consumerService,
   });
   provider.connection = connection;
@@ -862,7 +872,7 @@ test('lib/nats - should discover remote services', async () => {
 
 test('lib/nats - should fail discovery without providers', async () => {
   const application = {
-    config: { service: { discovery: { maxWait: 100 } } },
+    config: { server: { nats: { discovery: { maxWait: 100 } } } },
     service: {
       collection: { supportChat: { default: 1 } },
       isRemote: () => true,
@@ -876,80 +886,185 @@ test('lib/nats - should fail discovery without providers', async () => {
   });
 });
 
-test('lib/nats - should publish and subscribe events', async () => {
-  const invocations = [];
-  const supportChat = {
-    name: 'supportChat',
-    eventNames: () => ['user:created'],
-    dispatch: (...args) => invocations.push(args),
-  };
-  const location = {
-    name: 'location',
-    eventNames: () => ['user:created'],
-    dispatch: (...args) => invocations.push(args),
-  };
-  const application = {
-    console: { error() {} },
-    service: {
-      events: { supportChat, location },
+test('lib/nats - should discover events from the selected server', async () => {
+  const events = [
+    {
+      name: 'chat:1:message:created',
+      subject: 'chat.1.message.created',
+      caption: 'Message created',
+      description: '',
+      examples: null,
+    },
+  ];
+  const application = createApplication('server');
+  application.subscriptions = { describeEvents: () => events };
+  const requests = [];
+  const publications = [];
+  const eventDiscovery = {
+    loader: true,
+    request: () => requests.push('request'),
+    publish: async (discovered) => {
+      publications.push(structuredClone(discovered));
+      return { revision: publications.length, events: discovered };
     },
   };
-  const subscriptions = [];
-  const published = [];
+  const nats = new Nats(application, null, eventDiscovery);
+  const connection = createConnection();
+  nats.connect = async () => {
+    nats.connection = connection;
+  };
+
+  await nats.start();
+
+  assert.deepStrictEqual(requests, ['request']);
+  assert.deepStrictEqual(publications, [events]);
+  assert.deepStrictEqual(
+    nats.eventCatalog,
+    new Map([[events[0].name, events[0]]]),
+  );
+  assert.strictEqual(nats.eventCatalogRevision, 1);
+  assert.ok(nats.eventDiscoveryTimer);
+  assert.ok(nats.eventCatalogSubscription);
+  assert.ok(nats.eventDiscoveryChangeSubscription);
+  assert.ok(
+    connection.requests.some(
+      ({ subject }) => subject === EVENT_DISCOVERY_SUBJECT,
+    ),
+  );
+  assert.ok(
+    connection.published.some(
+      ({ subject }) => subject === EVENT_DISCOVERY_CHANGED_SUBJECT,
+    ),
+  );
+  await nats.close();
+  assert.strictEqual(nats.eventDiscoveryTimer, null);
+});
+
+test('lib/nats - should select one server for event discovery', async () => {
+  const snapshot = {
+    revision: 2,
+    events: [
+      {
+        name: 'profile:1:created',
+        subject: 'profile.1.created',
+      },
+    ],
+  };
+  for (const [kind, loader, expected] of [
+    ['server', true, true],
+    ['server', false, false],
+    ['worker', true, false],
+    ['balancer', true, false],
+  ]) {
+    const application = createApplication(kind);
+    application.subscriptions = { describeEvents: () => snapshot.events };
+    const eventDiscovery = {
+      loader,
+      publish: async (events) => ({ revision: 1, events }),
+    };
+    const nats = new Nats(application, null, eventDiscovery);
+    nats.connection = createConnection();
+
+    nats.subscribeEventCatalog();
+    nats.subscribeEventDiscoveryChanges();
+    nats.updateEventDiscovery();
+
+    assert.strictEqual(Boolean(nats.eventCatalogSubscription), expected);
+    assert.strictEqual(
+      Boolean(nats.eventDiscoveryChangeSubscription),
+      expected,
+    );
+    assert.strictEqual(nats.connection.published.length, expected ? 1 : 0);
+    const discovered = await nats.discoverEvents();
+    assert.strictEqual(discovered instanceof Map, expected);
+    nats.applyEventCatalog(snapshot);
+    nats.applyEventCatalog({ revision: 1, events: [] });
+    assert.strictEqual(nats.eventCatalogRevision, 2);
+    assert.deepStrictEqual(
+      nats.eventCatalog.get('profile:1:created'),
+      snapshot.events[0],
+    );
+    await nats.close();
+  }
+});
+
+test('lib/nats - should reject conflicting event contracts', async () => {
+  const application = createApplication('server');
   const nats = new Nats(application);
-  nats.connection = {
-    subscribe(subject, options) {
-      const subscription = {
-        subject,
-        options,
-        closed: false,
-        unsubscribe() {
-          this.closed = true;
-        },
-      };
-      subscriptions.push(subscription);
-      return subscription;
+  nats.connection = createConnection();
+  const variants = [
+    [{ name: 'chat:1:created', subject: 'chat.1.created', caption: 'first' }],
+    [{ name: 'chat:1:created', subject: 'chat.1.changed', caption: 'second' }],
+  ];
+  nats.connection.requestMany = async () => ({
+    async *[Symbol.asyncIterator]() {
+      for (const events of variants) yield { json: () => events };
     },
-    publish: (subject, payload) => published.push({ subject, payload }),
-  };
+  });
 
-  nats.subscribeEvents();
-  nats.subscribeEvents();
+  await assert.rejects(nats.fetchEvents(), (error) => {
+    assert.strictEqual(
+      error.message,
+      'Conflicting event contract: chat:1:created',
+    );
+    assert.strictEqual(error instanceof Error, true);
+    return true;
+  });
+});
 
-  assert.strictEqual(subscriptions.length, 2);
-  assert.strictEqual(subscriptions[0].subject, 'user.created');
-  assert.strictEqual(subscriptions[0].options.queue, 'supportChat');
-  assert.strictEqual(subscriptions[1].options.queue, 'location');
+test('lib/nats - should merge event metadata during rollout', async () => {
+  const application = createApplication('server');
+  const nats = new Nats(application);
+  nats.connection = createConnection();
+  const variants = [
+    [{ name: 'chat:1:created', subject: 'chat.1.created', caption: 'first' }],
+    [{ name: 'chat:1:created', subject: 'chat.1.created', caption: 'second' }],
+  ];
+  nats.connection.requestMany = async () => ({
+    async *[Symbol.asyncIterator]() {
+      for (const events of variants) yield { json: () => events };
+    },
+  });
 
-  const payload = { userId: 'user-1' };
-  nats.publishEvent('user:created', payload);
-  assert.deepStrictEqual(published, [
-    { subject: 'user.created', payload: JSON.stringify(payload) },
+  const events = await nats.fetchEvents();
+
+  assert.deepStrictEqual(events, variants[1]);
+});
+
+test('lib/nats - should publish an event on the supplied subject', () => {
+  const nats = new Nats(createApplication('server'));
+  const connection = createConnection();
+  nats.connection = connection;
+  const payload = { id: 'event-1', data: { value: 42 } };
+
+  nats.publishEvent('chat.1.message.created', payload);
+
+  assert.deepStrictEqual(connection.published, [
+    {
+      subject: 'chat.1.message.created',
+      payload: JSON.stringify(payload),
+    },
   ]);
+});
 
-  const message = { json: () => payload };
-  const currentInvocations = [];
-  application.service.events.supportChat = {
-    ...supportChat,
-    dispatch: (...args) => currentInvocations.push(args),
+test('lib/nats - should defer RPC subscriptions until connected', async () => {
+  const application = createApplication('server');
+  const nats = new Nats(application);
+  application.nats = nats;
+  addAction(application, 'first', async () => 1);
+  addAction(application, 'second', async () => 2);
+  assert.strictEqual(nats.serviceSubscriptions.size, 0);
+
+  const connection = createConnection();
+  nats.connect = async () => {
+    nats.connection = connection;
   };
-  application.service.events.location = {
-    ...location,
-    dispatch: (...args) => currentInvocations.push(args),
-  };
-  await subscriptions[0].options.callback(null, message);
-  await subscriptions[1].options.callback(null, message);
-
-  assert.deepStrictEqual(invocations, []);
-  assert.deepStrictEqual(currentInvocations, [
-    ['user:created', payload],
-    ['user:created', payload],
-  ]);
-
-  delete application.service.events.supportChat;
-  delete application.service.events.location;
-  nats.subscribeEvents();
-  assert.strictEqual(subscriptions[0].closed, true);
-  assert.strictEqual(subscriptions[1].closed, true);
-  assert.strictEqual(nats.eventSubscriptions.size, 0);
+  await nats.start();
+  try {
+    assert.strictEqual(nats.serviceSubscriptions.size, 2);
+    assert.strictEqual(connection.subscriptions.has('example.1.first'), true);
+    assert.strictEqual(connection.subscriptions.has('example.1.second'), true);
+  } finally {
+    await nats.close();
+  }
 });

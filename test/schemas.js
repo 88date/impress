@@ -30,11 +30,29 @@ test('schemas/config - should validate config schemas correctly', async () => {
   };
   assert.strictEqual(server.check(invalid).valid, false);
 
+  const invalidNats = {
+    ...config.server,
+    nats: { ...config.server.nats, enabled: 'true' },
+  };
+  assert.strictEqual(server.check(invalidNats).valid, false);
+
+  const invalidPubsub = {
+    ...config.server,
+    pubsub: { active: 'true' },
+  };
+  assert.strictEqual(server.check(invalidPubsub).valid, false);
+
+  const invalidPgboss = { ...config.server, pgboss: 'enabled' };
+  assert.strictEqual(server.check(invalidPgboss).valid, false);
+
+  const invalidCentrifugo = {
+    ...config.server,
+    centrifugo: { secret: true },
+  };
+  assert.strictEqual(server.check(invalidCentrifugo).valid, false);
+
   const sessions = await loadSchema('./schemas/config/sessions.js');
   assert.strictEqual(sessions.check(config.sessions).valid, true);
-
-  const service = await loadSchema('./schemas/config/service.js');
-  assert.strictEqual(service.check(config.service).valid, true);
 });
 
 test('schemas/contracts - should load procedure contract', async () => {

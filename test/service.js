@@ -25,8 +25,10 @@ const application = {
     return path.join(this.path, relative);
   },
   config: {
-    server: { timeouts: {} },
-    service: { discovery: { maxWait: 1000 } },
+    server: {
+      timeouts: {},
+      nats: { discovery: { maxWait: 1000 } },
+    },
   },
 };
 
@@ -48,12 +50,10 @@ test('lib/service load - should load service correctly', async () => {
   assert.strictEqual(example['1'].add.timeout, 5000);
   assert.deepStrictEqual(Object.keys(example['1']), ['add']);
   assert.deepStrictEqual(Object.keys(application.sandbox.service.example), [
-    'emit',
-    'on',
     'add',
   ]);
 
-  assert.strictEqual(application.config.service.discovery.maxWait, 1000);
+  assert.strictEqual(application.config.server.nats.discovery.maxWait, 1000);
   assert.strictEqual(example['1'].skipped, undefined);
   assert.strictEqual(example['1'].disabled, undefined);
 
@@ -73,24 +73,9 @@ test('lib/service load - should load service correctly', async () => {
   assert.strictEqual(metadata.actions[0].timeout, 5000);
   assert.deepStrictEqual(Array.from(metadata.actions[0].transports), ['nats']);
   assert.strictEqual('method' in metadata.actions[0], false);
-  assert.deepStrictEqual(metadata.events, []);
 
-  const eventBroker = service.events.example;
-  assert.strictEqual(eventBroker.constructor.name, 'EventBroker');
-  assert.deepStrictEqual(eventBroker.collection, {});
-
-  const result = await application.sandbox.service.example.add({ a: 4, b: 6 });
-  assert.strictEqual(result, 10);
-
-  const direct = await application.sandbox.service.example.add({
-    a: '4',
-    b: 6,
-  });
-  assert.strictEqual(direct, '46');
-
-  await assert.rejects(example['1'].add.invoke({}, { a: '4', b: 6 }), (error) =>
-    error.message.startsWith('Invalid parameters'),
-  );
+  assert.strictEqual(application.sandbox.service.example.emit, undefined);
+  assert.strictEqual(application.sandbox.service.example.on, undefined);
 });
 
 test('lib/service version - should derive version from directory', async () => {
@@ -128,22 +113,12 @@ test('lib/service discovery - should load remote contracts', async () => {
     deprecated: false,
     examples: null,
   };
-  const event = {
-    name: 'message:created',
-    parameters: { conversationId: 'string' },
-    caption: 'Message created',
-    description: '',
-    deprecated: false,
-    examples: null,
-  };
-
-  service.loadRemote(name, [contract], [event]);
+  service.loadRemote(name, [contract]);
 
   const broker = service.collection.remoteChat['1'].sendMessage;
   assert.strictEqual(broker.discovered, true);
   assert.strictEqual(broker.script, null);
   assert.strictEqual(broker.caption, 'Send message');
-  assert.deepStrictEqual(service.events.remoteChat.collection, {});
   assert.strictEqual(
     typeof application.sandbox.service.remoteChat.sendMessage,
     'function',
@@ -166,12 +141,7 @@ test('lib/service discovery - should load remote contracts', async () => {
     ['remoteChat.1.sendMessage', { text: 'Hello' }, 5000],
   ]);
 
-  const updatedEvent = { ...event, name: 'conversation:created' };
-  service.loadRemote(
-    name,
-    [{ ...contract, name: 'createConversation' }],
-    [updatedEvent],
-  );
+  service.loadRemote(name, [{ ...contract, name: 'createConversation' }]);
   assert.strictEqual(
     typeof application.sandbox.service.remoteChat.sendMessage,
     'function',
@@ -180,76 +150,10 @@ test('lib/service discovery - should load remote contracts', async () => {
     typeof application.sandbox.service.remoteChat.createConversation,
     'function',
   );
-  assert.deepStrictEqual(service.events.remoteChat.collection, {});
 
   application.nats = null;
   delete service.collection[name];
-  delete service.events[name];
   delete application.sandbox.service[name];
-});
-
-test('lib/service events - should select one handler per group', async () => {
-  service.prepareUnit('supportChat.1');
-  service.prepareUnit('location.1');
-  service.events.example.load({
-    'calculation:complete': {
-      parameters: { result: 'number' },
-    },
-  });
-  const { example, supportChat, location } = application.sandbox.service;
-  const calls = { first: 0, second: 0, location: 0 };
-  const contexts = [];
-
-  supportChat.on('example:calculation:complete', async () => {
-    calls.first++;
-    contexts.push(application.contextStorage.getStore());
-  });
-  supportChat.on('example:calculation:complete', async () => {
-    calls.second++;
-    contexts.push(application.contextStorage.getStore());
-  });
-  location.on('example:calculation:complete', async () => {
-    calls.location++;
-    contexts.push(application.contextStorage.getStore());
-  });
-
-  const context = { session: { state: { userId: 'user-1' } } };
-  await application.contextStorage.run(context, () =>
-    example.emit('calculation:complete', { result: 1 }),
-  );
-  await example.emit('calculation:complete', { result: 2 });
-
-  assert.deepStrictEqual(calls, { first: 1, second: 1, location: 2 });
-  assert.deepStrictEqual(contexts, [null, null, null, null]);
-
-  await example.emit('calculation:complete', { result: 3 });
-  assert.deepStrictEqual(calls, { first: 2, second: 1, location: 3 });
-});
-
-test('lib/service events - should use NATS when connected', async () => {
-  const calls = [];
-  service.events.example.load({
-    'calculation:complete': {
-      parameters: { result: 'number' },
-    },
-  });
-  application.nats = {
-    publishEvent: (...args) => calls.push(['emit', ...args]),
-    subscribeEvent: (broker, eventName) =>
-      calls.push(['on', broker.name, eventName]),
-  };
-  service.prepareUnit('notifications.1');
-  const { example, notifications } = application.sandbox.service;
-  const handler = async () => {};
-
-  notifications.on('example:calculation:complete', handler);
-  await example.emit('calculation:complete', { result: 3 });
-
-  assert.deepStrictEqual(calls, [
-    ['on', 'notifications', 'example:calculation:complete'],
-    ['emit', 'example:calculation:complete', { result: 3 }],
-  ]);
-  application.nats = null;
 });
 
 test('lib/service delete - should use version 1 by default', async () => {

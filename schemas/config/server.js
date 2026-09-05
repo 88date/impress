@@ -27,8 +27,22 @@
     active: 'boolean',
     notify: '?boolean',
   },
+  pubsub: {
+    active: 'boolean',
+  },
+  nats: {
+    enabled: 'boolean',
+    servers: '?string',
+    credentials: '?string',
+    discovery: {
+      maxWait: 'number',
+    },
+  },
+  pgboss: 'json',
+  centrifugo: {
+    secret: '?string',
+  },
   cors: {
     origin: '?string',
   },
-  secret: '?string',
 });

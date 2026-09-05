@@ -1,3 +1,8 @@
+import type {
+  ConstructorOptions as PgbossOptions,
+  PgBossEventMap,
+} from 'pg-boss';
+
 export interface LogConfig {
   keepDays: number;
   writeInterval: number;
@@ -40,10 +45,15 @@ export interface ServerConfig {
     timeout: number;
   };
   scheduler: SchedulerConfig;
+  pubsub: PubSubConfig;
+  nats: NatsConfig;
+  pgboss: PgbossConfig;
+  centrifugo: {
+    secret?: string;
+  };
   cors?: {
     origin: string;
   };
-  secret: string;
 }
 
 export interface CacheConfig {
@@ -52,7 +62,7 @@ export interface CacheConfig {
   avoid?: Array<string>;
 }
 
-export interface ServiceConfig {
+export interface NatsConfig {
   enabled: boolean;
   servers?: string;
   credentials?: string;
@@ -67,6 +77,17 @@ export interface SchedulerConfig {
   /** Enable LISTEN/NOTIFY for tasks; false uses polling. Defaults to false. */
   notify?: boolean;
 }
+
+export interface PubSubConfig {
+  /** Make this instance the pg-boss subscriber topology manager. */
+  active: boolean;
+}
+
+export type PgbossConfig = PgbossOptions & {
+  enabled: boolean;
+  /** pg-boss events written to the application log. */
+  logEvents?: Array<keyof PgBossEventMap>;
+};
 
 export interface SessionsConfig {
   sid: string;

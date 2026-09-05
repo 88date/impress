@@ -4,7 +4,6 @@ import {
   ServerConfig,
   SessionsConfig,
   CacheConfig,
-  ServiceConfig,
 } from './config';
 import { Application, Context, Client } from './core';
 import { Services } from './service';
@@ -82,6 +81,45 @@ type TaskWorkerOptions = Pick<
 >;
 
 declare global {
+  interface EventMetadata {
+    id: string;
+    name: string;
+    createdAt: string;
+    signal?: AbortSignal;
+  }
+
+  type EventDeclaration<Data = Record<string, unknown>> = {
+    caption?: string;
+    description?: string;
+    examples?: Data[];
+    transports: Array<'local' | 'nats'>;
+  };
+
+  type SubscriberDeclaration<Data = Record<string, unknown>> = {
+    event: string;
+    /** Concurrent handlers per pg-boss instance. Defaults to 1. */
+    concurrency?: number;
+    /** Number of retries after a failed handler. */
+    retryLimit?: number;
+    /** Delay between retries in milliseconds. */
+    retryDelay?: number;
+    /** Maximum handler execution time in milliseconds. */
+    timeout?: number;
+    method: (data: Data, event: EventMetadata) => unknown | Promise<unknown>;
+  };
+
+  interface EventEmitOptions {
+    transaction?: unknown;
+  }
+
+  interface Events {
+    emit(
+      name: string,
+      data: unknown,
+      options?: EventEmitOptions,
+    ): Promise<string>;
+  }
+
   type TaskDeclaration<
     Data extends object = Record<string, unknown>,
     Result = unknown,
@@ -106,6 +144,7 @@ declare global {
 
   const application: Application;
   const context: Context;
+  const events: Events;
   const service: Services;
   const tasks: Record<string, TaskDeclaration>;
 
@@ -115,8 +154,6 @@ declare global {
     const server: ServerConfig;
     const sessions: SessionsConfig;
     const cache: CacheConfig;
-    const service: ServiceConfig;
-    const pgboss: _pgboss.ConstructorOptions & { enabled: boolean };
   }
 
   namespace metarhia {

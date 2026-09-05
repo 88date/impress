@@ -2,7 +2,14 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { ServiceCatalog } = require('../lib/catalog.js');
+const {
+  ServiceCatalog,
+  EventCatalog,
+  DiscoveryWorker,
+} = require('../lib/catalog.js');
+
+const createCatalog = (threads, config) =>
+  new ServiceCatalog(threads, new DiscoveryWorker(threads, config));
 
 const createThread = () => ({
   messages: [],
@@ -18,14 +25,20 @@ test('lib/catalog - should select one discovery worker', () => {
     [{ ports: [] }, 1],
   ];
   for (const [config, expected] of cases) {
-    const catalog = new ServiceCatalog(new Map(), config);
+    const catalog = createCatalog(new Map(), config);
     const kinds = ['balancer', 'server', 'server', 'worker', 'worker'];
     for (const [index, kind] of kinds.entries()) {
       const id = index + 1;
-      assert.strictEqual(catalog.register(id, kind), id === expected);
+      assert.strictEqual(
+        catalog.discoveryWorker.register(id, kind),
+        id === expected,
+      );
     }
-    assert.strictEqual(catalog.loaderId, expected);
-    assert.strictEqual(catalog.register(expected, kinds[expected - 1]), true);
+    assert.strictEqual(catalog.discoveryWorker.id, expected);
+    assert.strictEqual(
+      catalog.discoveryWorker.register(expected, kinds[expected - 1]),
+      true,
+    );
   }
 });
 
@@ -36,8 +49,8 @@ test('lib/catalog - should cache snapshots for late workers', () => {
     [1, loader],
     [2, follower],
   ]);
-  const catalog = new ServiceCatalog(threads, { ports: [8000] });
-  catalog.register(1, 'server');
+  const catalog = createCatalog(threads, { ports: [8000] });
+  catalog.discoveryWorker.register(1, 'server');
   catalog.send(follower);
   assert.deepStrictEqual(follower.messages, []);
 
@@ -64,13 +77,13 @@ test('lib/catalog - should cache snapshots for late workers', () => {
 test('lib/catalog - should preserve catalog across loader restart', () => {
   const previous = createThread();
   const threads = new Map([[1, previous]]);
-  const catalog = new ServiceCatalog(threads, { ports: [8000] });
-  catalog.register(1, 'server');
+  const catalog = createCatalog(threads, { ports: [8000] });
+  catalog.discoveryWorker.register(1, 'server');
   catalog.publish(previous, [{ name: 'example', actions: [] }]);
 
   const replacement = createThread();
   threads.set(1, replacement);
-  assert.strictEqual(catalog.register(1, 'server'), true);
+  assert.strictEqual(catalog.discoveryWorker.register(1, 'server'), true);
   catalog.send(replacement);
   assert.strictEqual(replacement.messages[0].snapshot.revision, 1);
   const cached = catalog.publish(replacement, [
@@ -95,8 +108,8 @@ test('lib/catalog - should skip unchanged catalogs in any order', () => {
     [1, loader],
     [2, follower],
   ]);
-  const catalog = new ServiceCatalog(threads, { ports: [8000] });
-  catalog.register(1, 'server');
+  const catalog = createCatalog(threads, { ports: [8000] });
+  catalog.discoveryWorker.register(1, 'server');
   const services = [
     {
       name: 'example',
@@ -134,10 +147,10 @@ test('lib/catalog - should skip unchanged catalogs in any order', () => {
 
 test('lib/catalog - should broadcast changed contracts and removals', () => {
   const loader = createThread();
-  const catalog = new ServiceCatalog(new Map([[1, loader]]), {
+  const catalog = createCatalog(new Map([[1, loader]]), {
     ports: [8000],
   });
-  catalog.register(1, 'server');
+  catalog.discoveryWorker.register(1, 'server');
   const services = [
     {
       name: 'example',
@@ -172,18 +185,98 @@ test('lib/catalog - should broadcast changed contracts and removals', () => {
 test('lib/catalog - should isolate application catalogs', () => {
   const first = createThread();
   const second = createThread();
-  const firstCatalog = new ServiceCatalog(new Map([[1, first]]), {
+  const firstCatalog = createCatalog(new Map([[1, first]]), {
     ports: [8000],
   });
-  const secondCatalog = new ServiceCatalog(new Map([[2, second]]), {
+  const secondCatalog = createCatalog(new Map([[2, second]]), {
     ports: [8001],
   });
-  firstCatalog.register(1, 'server');
-  secondCatalog.register(2, 'server');
+  firstCatalog.discoveryWorker.register(1, 'server');
+  secondCatalog.discoveryWorker.register(2, 'server');
 
   firstCatalog.publish(first, []);
 
   assert.strictEqual(first.messages.length, 1);
   assert.deepStrictEqual(second.messages, []);
   assert.strictEqual(secondCatalog.snapshot, null);
+});
+
+test('lib/catalog - event catalog should share discovery loader', () => {
+  const follower = createThread();
+  const loader = createThread();
+  const threads = new Map([
+    [1, follower],
+    [2, loader],
+  ]);
+  const services = createCatalog(threads, { ports: [8000] });
+  const events = new EventCatalog(threads, services.discoveryWorker);
+
+  assert.strictEqual(services.discoveryWorker.register(1, 'balancer'), false);
+  assert.strictEqual(services.discoveryWorker.register(2, 'server'), true);
+  assert.throws(() => events.publish(follower, []), {
+    message: 'Only the discovery worker can publish the event catalog',
+  });
+
+  const declarations = [
+    {
+      name: 'profile:1:created',
+      subject: 'profile.1.created',
+      caption: 'Profile created',
+    },
+    {
+      name: 'chat:1:message:created',
+      subject: 'chat.1.message.created',
+      caption: 'Message created',
+    },
+  ];
+  const snapshot = events.publish(loader, structuredClone(declarations));
+  const message = {
+    name: 'eventCatalog',
+    snapshot: { revision: 1, events: declarations },
+  };
+  assert.deepStrictEqual(snapshot, message.snapshot);
+  assert.deepStrictEqual(loader.messages, [message]);
+  assert.deepStrictEqual(follower.messages, [message]);
+
+  const reordered = structuredClone(declarations).toReversed();
+  assert.strictEqual(events.publish(loader, reordered), snapshot);
+  assert.strictEqual(loader.messages.length, 1);
+  assert.strictEqual(follower.messages.length, 1);
+
+  declarations[0].caption = 'Created profile';
+  const updated = events.publish(loader, structuredClone(declarations));
+  assert.strictEqual(updated.revision, 2);
+
+  const late = createThread();
+  threads.set(3, late);
+  events.send(late);
+  assert.deepStrictEqual(late.messages, [
+    { name: 'eventCatalog', snapshot: updated },
+  ]);
+});
+
+test('lib/catalog - event broadcast should skip disconnected workers', () => {
+  const loader = createThread();
+  const disconnected = {
+    postMessage() {
+      throw new Error('Worker is closed');
+    },
+  };
+  const follower = createThread();
+  const threads = new Map([
+    [1, loader],
+    [2, disconnected],
+    [3, follower],
+  ]);
+  const services = createCatalog(threads, { ports: [8000] });
+  const events = new EventCatalog(threads, services.discoveryWorker);
+  services.discoveryWorker.register(1, 'server');
+
+  const snapshot = events.publish(loader, [
+    { name: 'chat:1:created', subject: 'chat.1.created' },
+  ]);
+
+  assert.deepStrictEqual(follower.messages, [
+    { name: 'eventCatalog', snapshot },
+  ]);
 });

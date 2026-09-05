@@ -7,6 +7,7 @@ const {
   describeServices,
   describeSchemas,
   describeQueues,
+  describeEvents,
 } = require('../lib/documentation.js');
 
 const createProcedure = (exp, options = {}) => ({
@@ -45,6 +46,7 @@ test('lib/documentation - should describe application interfaces', () => {
     example: {
       1: {
         add: {
+          origin: 'local',
           caption: 'Add numbers',
           description: 'Returns the sum',
           protocols: ['http'],
@@ -95,6 +97,7 @@ test('lib/documentation - should describe application interfaces', () => {
     chat: {
       1: {
         sendMessage: {
+          origin: 'local',
           caption: 'Send message',
           description: undefined,
           protocols: undefined,
@@ -110,6 +113,7 @@ test('lib/documentation - should describe application interfaces', () => {
       },
       2: {
         createConversation: {
+          origin: 'remote',
           caption: 'Create conversation',
           description: undefined,
           protocols: undefined,
@@ -203,4 +207,28 @@ test('lib/documentation - should describe application interfaces', () => {
       },
     },
   });
+});
+
+test('lib/documentation - event origin is relative to the application', () => {
+  const local = Object.freeze({
+    name: 'chat:1:created',
+    transports: ['local', 'nats'],
+    caption: 'Local declaration',
+  });
+  const sameName = { ...local, caption: 'Discovered declaration' };
+  const remote = Object.freeze({
+    name: 'profile:1:updated',
+    origin: 'local',
+  });
+  const discovered = new Map([
+    [remote.name, remote],
+    [sameName.name, sameName],
+  ]);
+
+  assert.deepStrictEqual(describeEvents([local], discovered), [
+    { ...local, origin: 'local' },
+    { ...remote, transports: ['nats'], origin: 'remote' },
+  ]);
+  assert.strictEqual(discovered.get(local.name), sameName);
+  assert.deepStrictEqual(describeEvents(), []);
 });

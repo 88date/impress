@@ -87,21 +87,31 @@ Consumer settings:
 
 ## Configuration
 
-The pg-boss connection is controlled by `application/config/pgboss.js`:
+The pg-boss connection is configured in `application/config/server.js`:
 
 ```js
 ({
-  enabled: process.env.PG_BOSS_ENABLED === 'true',
-  connectionString: process.env.DATABASE_URL_PG,
-  ssl: {
-    caPath: 'application/cert/postgres.crt',
-    rejectUnauthorized: true,
+  // Other server settings
+  pgboss: {
+    enabled: process.env.PG_BOSS_ENABLED === 'true',
+    logEvents: ['error', 'warning'],
+    connectionString: process.env.DATABASE_URL_PG,
+    ssl: {
+      caPath: 'application/cert/postgres.crt',
+      rejectUnauthorized: true,
+    },
   },
 });
 ```
 
 Relative `caPath` values are resolved from the application working directory
 and loaded before connecting.
+
+`server.pgboss.logEvents` selects the pg-boss events written to the
+application log. It defaults to `error` and `warning`. Add `wip`, `stopped`,
+`bam`, or `flow` when their diagnostic output is needed. An empty array
+disables pg-boss event logs while keeping a silent error listener so an
+unhandled EventEmitter error cannot terminate the process.
 
 `server.scheduler.notify` selects the task delivery mode. It defaults to
 `false` (polling). Setting it to `true` enables the pg-boss listener and queue
@@ -110,7 +120,7 @@ the loader reports an error directing you to `server.scheduler.notify`.
 
 When the task subsystem is enabled, Impress derives the shared client's
 `useListenNotify` option from `server.scheduler.notify`, taking precedence over
-the value in `config.pgboss`. When tasks are disabled, the pg-boss connection
+the value in `config.server.pgboss`. When tasks are disabled, the pg-boss connection
 configuration is used as supplied.
 
 Notifications wake consumers when immediately available jobs are inserted.
@@ -142,7 +152,7 @@ Only the designated instance should manage task declarations:
 
 The `scheduler.enabled` setting controls the entire task subsystem. Disabled
 instances do not load task declarations, register consumers, or manage
-schedules. Every instance with `scheduler.enabled` and `pgboss.enabled`
+schedules. Every instance with `scheduler.enabled` and `config.server.pgboss.enabled`
 registers task consumers, so pg-boss can distribute jobs between application
 instances. Only the designated instance should set `scheduler.active` to
 create and remove schedules and update existing queue settings. Inactive

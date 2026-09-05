@@ -54,7 +54,7 @@ const res = await metacom.api.example.citiesByCountry({ countryId: 3 });
 
 ## NATS RPC worker roles
 
-With `config.service.enabled`, every application worker opens its own NATS
+With `config.server.nats.enabled`, every application worker opens its own NATS
 connection. All workers can make outgoing RPC calls directly through NATS.
 
 Only workers with `kind: 'server'` subscribe to API methods whose `transports`
@@ -88,6 +88,15 @@ await service.profile.get({ id }, { version: 1 });
 
 An explicit version applies to both local and remote calls. If that version or
 method is unavailable, the call fails without falling back to another version.
+
+## Application events
+
+Declare events in `application/events`, declare their handlers in
+`application/subscribers`, and publish through `events.emit(name, data)`.
+See [event delivery, configuration, and migration](EVENTS.md).
+
+RPC services expose actions only. Event publication and subscriptions use
+the dedicated events API.
 
 ## Metarhia and impress application server way
 
@@ -139,7 +148,7 @@ Those features will be implemented in nearest future (3-6 months):
 
 ## Requirements
 
-- Node.js v18.15 (up to v24.x)
+- Node.js v22.13 or later
 - Linux (tested on Fedora v36-42, Ubuntu v20-25, CentOS v8-9, RHEL v8-10)
 - PostgreSQL v12-17 (recommended v15+)
 - OpenSSL v3.0+ (optional, for https & wss)

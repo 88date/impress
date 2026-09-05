@@ -25,7 +25,7 @@ interface Procedure {
   parameters?: Schema;
   returns?: Schema;
   errors?: Record<string, string>;
-  semaphore?: Semaphore;
+  locks: Map<string | undefined, Semaphore>;
   caption?: string;
   description?: string;
   access?: Access;
@@ -39,6 +39,6 @@ interface Procedure {
   assert?: Function;
   examples?: Array<Example>;
   invoke(context: object, args?: object): Promise<unknown>;
-  enter(): Promise<void>;
-  leave(): void;
+  enter(ip?: string): Promise<void>;
+  leave(ip?: string): void;
 }

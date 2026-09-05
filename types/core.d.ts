@@ -47,9 +47,11 @@ export interface Client {
 }
 
 export interface DocumentationEndpoint {
+  origin: 'local' | 'remote';
   caption?: string;
   description?: string;
   protocols?: unknown;
+  transports: string[];
   roles?: unknown;
   access?: string;
   parameters?: unknown;
@@ -63,11 +65,22 @@ export type DocumentationMethods = Record<string, DocumentationEndpoint>;
 export type DocumentationVersions = Record<string, DocumentationMethods>;
 export type DocumentationUnits = Record<string, DocumentationVersions>;
 
+export interface DocumentationEvent {
+  name: string;
+  origin: 'local' | 'remote';
+  transports: Array<'local' | 'nats'>;
+  subject: string;
+  caption: string;
+  description: string;
+  examples: unknown[] | null;
+}
+
 export interface ApplicationDocumentation {
   api: DocumentationUnits;
   services: DocumentationUnits;
   schemas: Record<string, unknown>;
   queues: Record<string, unknown>;
+  events: DocumentationEvent[];
 }
 
 export interface Application extends EventEmitter {
