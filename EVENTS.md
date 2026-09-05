@@ -83,6 +83,13 @@ subscriber queues. Its designated discovery worker creates and updates
 bindings and removes queues for deleted subscribers. Other workers consume
 without changing the shared topology.
 
+Before starting a local consumer, a non-managing worker checks that its queue
+exists. If the managing worker has not created it yet, the consumer waits in
+the background and checks again once per second. Application startup and
+other subscribers can proceed. Checks stop after the consumer starts, the
+subscriber is removed, or the application stops. If no managing instance is
+active, consumers of missing queues keep waiting.
+
 Changing a subscriber's event replaces its persisted pg-boss binding,
 including after an application restart. Moving a subscriber to NATS clears
 its previous local binding without deleting the queue.

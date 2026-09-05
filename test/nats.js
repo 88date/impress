@@ -86,7 +86,9 @@ const createConnection = () => {
           subject,
           json: () => JSON.parse(payload),
         };
-        Promise.resolve(subscription.callback(null, message)).catch(() => {});
+        Promise.resolve()
+          .then(() => subscription.callback(null, message))
+          .catch(() => {});
       }
     },
     async flush() {},
@@ -157,6 +159,11 @@ test('lib/nats - should register server RPC on start and reload', async () => {
     42,
   );
   assert.strictEqual(connection.published.length, 1);
+  assert.strictEqual(
+    connection.requests.filter(({ subject }) => subject === 'service.discovery')
+      .length,
+    1,
+  );
 
   addAction(application, 'echo', async () => 'updated');
   addAction(application, 'created', async () => 'created');
@@ -918,6 +925,10 @@ test('lib/nats - should discover events from the selected server', async () => {
 
   assert.deepStrictEqual(requests, ['request']);
   assert.deepStrictEqual(publications, [events]);
+  assert.deepStrictEqual(
+    connection.requests.map(({ subject }) => subject),
+    ['service.discovery', EVENT_DISCOVERY_SUBJECT],
+  );
   assert.deepStrictEqual(
     nats.eventCatalog,
     new Map([[events[0].name, events[0]]]),

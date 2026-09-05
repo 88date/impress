@@ -77,6 +77,7 @@ for (const kind of ['subscriber', 'publisher']) {
       },
     });
     manager.work = async () => 'worker-1';
+    manager.getQueue = async () => ({ name });
     const pgboss = { client: manager };
     let handle;
     if (kind === 'publisher') {

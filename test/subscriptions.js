@@ -746,14 +746,17 @@ test('subscriptions - inactive instance should only consume', async () => {
   const pgboss = createPgboss();
   const pubsub = createManager(createEmitter(), pgboss, null, console, false);
   const subscriber = createSubscriber();
+  pgboss.client.queues.set(subscriber.queueName, {
+    name: subscriber.queueName,
+  });
   await pubsub.registerEvent(createEvent());
   await pubsub.registerSubscriber(subscriber);
 
   await pubsub.start();
 
   assert.strictEqual(countCalls(pgboss.client.calls, 'work'), 1);
+  assert.strictEqual(countCalls(pgboss.client.calls, 'getQueue'), 1);
   for (const operation of [
-    'getQueue',
     'getQueues',
     'createQueue',
     'updateQueue',
@@ -768,6 +771,109 @@ test('subscriptions - inactive instance should only consume', async () => {
 
   assert.strictEqual(countCalls(pgboss.client.calls, 'offWork'), 1);
   assert.strictEqual(countCalls(pgboss.client.calls, 'deleteQueue'), 0);
+});
+
+test('subscriptions - wait for queues from a later manager', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const pgboss = createPgboss();
+  const client = pgboss.client;
+  const pubsub = createManager(createEmitter(), pgboss, null, console, false);
+  t.after(() => pubsub.stop());
+  const subscriber = createSubscriber();
+  const ready = createSubscriber({
+    subscriberName: 'feed:1:ready',
+    queueName: `${SUBSCRIBER_QUEUE_PREFIX}feed/1/ready`,
+  });
+  client.queues.set(ready.queueName, { name: ready.queueName });
+  await pubsub.registerEvent(createEvent());
+  await pubsub.registerSubscriber(subscriber);
+  await pubsub.registerSubscriber(ready);
+
+  await pubsub.start();
+
+  assert.strictEqual(client.handlers.has(subscriber.queueName), false);
+  assert.strictEqual(client.handlers.has(ready.queueName), true);
+  assert.strictEqual(pubsub.active.size, 1);
+  assert.strictEqual(countCalls(client.calls, 'createQueue'), 0);
+
+  t.mock.timers.tick(1000);
+  await pubsub.operation;
+  assert.strictEqual(countCalls(client.calls, 'getQueue'), 3);
+  assert.strictEqual(countCalls(client.calls, 'work'), 1);
+
+  const calls = [];
+  await pubsub.registerSubscriber(
+    createSubscriber({ method: async () => calls.push('reloaded') }),
+  );
+  const managingPgboss = createPgboss();
+  managingPgboss.client.queues = client.queues;
+  const manager = createManager(createEmitter(), managingPgboss);
+  t.after(() => manager.stop());
+  await manager.registerEvent(createEvent());
+  await manager.registerSubscriber(subscriber);
+  await manager.registerSubscriber(ready);
+  await manager.start();
+
+  t.mock.timers.tick(1000);
+  await pubsub.operation;
+
+  assert.strictEqual(pubsub.active.size, 2);
+  assert.strictEqual(countCalls(client.calls, 'work'), 2);
+  assert.strictEqual(countCalls(client.calls, 'createQueue'), 0);
+  assert.strictEqual(countCalls(client.calls, 'updateQueue'), 0);
+  assert.strictEqual(countCalls(client.calls, 'subscribe'), 0);
+  assert.strictEqual(countCalls(managingPgboss.client.calls, 'createQueue'), 1);
+  await client.handlers.get(subscriber.queueName)([
+    { data: { name: subscriber.eventName, data: {} } },
+  ]);
+  assert.deepStrictEqual(calls, ['reloaded']);
+
+  const checks = countCalls(client.calls, 'getQueue');
+  t.mock.timers.tick(5000);
+  await pubsub.operation;
+  assert.strictEqual(countCalls(client.calls, 'getQueue'), checks);
+  assert.strictEqual(countCalls(client.calls, 'work'), 2);
+});
+
+for (const action of ['stop', 'removeSubscriber']) {
+  test(`subscriptions - cancel queue waiting on ${action}`, async (t) => {
+    t.mock.timers.enable({ apis: ['setTimeout'] });
+    const pgboss = createPgboss();
+    const client = pgboss.client;
+    const pubsub = createManager(createEmitter(), pgboss, null, console, false);
+    t.after(() => pubsub.stop());
+    const subscriber = createSubscriber();
+    await pubsub.registerEvent(createEvent());
+    await pubsub.registerSubscriber(subscriber);
+    await pubsub.start();
+
+    await pubsub[action](subscriber.subscriberName);
+    const checks = countCalls(client.calls, 'getQueue');
+    client.queues.set(subscriber.queueName, { name: subscriber.queueName });
+    t.mock.timers.tick(5000);
+    await pubsub.operation;
+
+    assert.strictEqual(countCalls(client.calls, 'getQueue'), checks);
+    assert.strictEqual(countCalls(client.calls, 'work'), 0);
+    assert.strictEqual(pubsub.active.size, 0);
+  });
+}
+
+test('subscriptions - propagate queue lookup failures on start', async () => {
+  const pgboss = createPgboss();
+  const error = new Error('connection lost');
+  pgboss.client.getQueue = async () => {
+    throw error;
+  };
+  const pubsub = createManager(createEmitter(), pgboss, null, console, false);
+  await pubsub.registerEvent(createEvent());
+  await pubsub.registerSubscriber(createSubscriber());
+
+  await assert.rejects(pubsub.start(), { cause: error });
+
+  assert.strictEqual(pubsub.started, false);
+  assert.strictEqual(pubsub.active.size, 0);
+  assert.strictEqual(countCalls(pgboss.client.calls, 'work'), 0);
 });
 
 test('subscriptions - active instance removes remote subscriber', async () => {
