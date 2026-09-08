@@ -548,6 +548,105 @@ test('lib/nats - should stop pending catalog refresh on close', async () => {
   }
 });
 
+for (const source of ['change', 'reconnect']) {
+  test(`lib/nats - handles ${source} discovery errors on close`, async () => {
+    for (const subject of ['service.discovery', EVENT_DISCOVERY_SUBJECT]) {
+      for (const isClosing of [false, true]) {
+        const application = createApplication('server');
+        const errors = [];
+        application.console.error = (error) => errors.push(error);
+        application.subscriptions = { describeEvents: () => [] };
+        const eventDiscovery = {
+          loader: true,
+          publish: async (events) => ({ revision: 1, events }),
+        };
+        const nats = new Nats(application, null, eventDiscovery);
+        const connection = createConnection();
+        const entered = Promise.withResolvers();
+        const pending = Promise.withResolvers();
+        const error = new npm.nats.RequestError('connection closed');
+        connection.requestMany = async (requested) => ({
+          async *[Symbol.asyncIterator]() {
+            if (requested === subject) {
+              entered.resolve();
+              await pending.promise;
+            }
+            yield { json: () => [] };
+          },
+        });
+        connection.drain = async () => pending.reject(error);
+        nats.connection = connection;
+        let refreshing;
+        if (source === 'change') {
+          nats.subscribeDiscoveryChanges();
+          nats.subscribeEventDiscoveryChanges();
+          refreshing = connection.subscriptions
+            .get(`${subject}.changed`)
+            .callback(null);
+        } else {
+          connection.status = async function* () {
+            yield { type: 'reconnect' };
+          };
+          refreshing = nats.watchStatus();
+        }
+        await entered.promise;
+        if (isClosing) await nats.close();
+        else pending.reject(error);
+        await refreshing;
+
+        assert.strictEqual(errors.length, isClosing ? 0 : 1);
+        if (!isClosing) assert.strictEqual(errors[0].cause, error);
+        assert.strictEqual(nats.discoveryPromise, null);
+        assert.strictEqual(nats.eventDiscoveryPromise, null);
+        await nats.close();
+      }
+    }
+  });
+}
+
+test('lib/nats - cancel startup during event discovery', async (t) => {
+  const application = createApplication('server');
+  const errors = [];
+  application.console.error = (error) => errors.push(error);
+  application.subscriptions = { describeEvents: () => [] };
+  const nats = new Nats(application, null, {
+    loader: true,
+    request() {},
+    publish: async (events) => ({ revision: 1, events }),
+  });
+  t.after(() => nats.close());
+  const connection = createConnection();
+  const entered = Promise.withResolvers();
+  const pending = Promise.withResolvers();
+  connection.requestMany = async (subject) => ({
+    async *[Symbol.asyncIterator]() {
+      if (subject === EVENT_DISCOVERY_SUBJECT) {
+        entered.resolve();
+        await pending.promise;
+      }
+      yield { json: () => [] };
+    },
+  });
+  connection.drain = async () => {
+    pending.reject(new npm.nats.RequestError('connection closed'));
+  };
+  nats.connect = async () => {
+    nats.connection = connection;
+  };
+  const starting = nats.start();
+  const rejected = assert.rejects(starting, {
+    message: 'Service discovery stopped',
+  });
+  await entered.promise;
+  await nats.discoveryPromise;
+  await nats.close();
+  await rejected;
+
+  assert.deepStrictEqual(errors, []);
+  assert.strictEqual(nats.eventDiscoveryTimer, null);
+  assert.strictEqual(nats.eventCatalog, null);
+});
+
 test('lib/nats - should time out waiting for the shared catalog', async () => {
   const application = createApplication('worker');
   application.config.server.timeouts.start = 20;
