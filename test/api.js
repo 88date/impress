@@ -76,3 +76,12 @@ test('lib/api load - should load router without transports', () => {
   assert.strictEqual(typeof router.method, 'function');
   assert.deepStrictEqual(router.transports, []);
 });
+
+test('lib/api load - should allow starting at version 5', async () => {
+  const { versioned } = api.collection;
+
+  assert.strictEqual(versioned.default, 5);
+  assert.strictEqual(versioned['1'], undefined);
+  const result = await application.sandbox.api.versioned.echo({ value: 42 });
+  assert.strictEqual(result, 42);
+});
