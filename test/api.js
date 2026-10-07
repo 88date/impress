@@ -28,8 +28,9 @@ before(async () => {
 test('lib/api load - should load API correctly', () => {
   const { example } = api.collection;
 
-  assert.strictEqual(example.default, 1);
+  assert.strictEqual(example.default, '*');
   const { add } = example['1'];
+  assert.strictEqual(example[example.default].add, add);
   assert.strictEqual(add.constructor.name, 'Procedure');
   assert.strictEqual(typeof add.method, 'function');
   assert.strictEqual(add.method.constructor.name, 'AsyncFunction');
@@ -80,8 +81,34 @@ test('lib/api load - should load router without transports', () => {
 test('lib/api load - should allow starting at version 5', async () => {
   const { versioned } = api.collection;
 
-  assert.strictEqual(versioned.default, 5);
+  assert.strictEqual(versioned.default, '*');
+  assert.strictEqual(versioned[versioned.default].echo, versioned['5'].echo);
   assert.strictEqual(versioned['1'], undefined);
   const result = await application.sandbox.api.versioned.echo({ value: 42 });
   assert.strictEqual(result, 42);
+});
+
+test('lib/api - should refresh the default on changes and deletions', () => {
+  const target = { ...application, sandbox: { api: {} } };
+  const localApi = new Api('api', target);
+  const latest = { method: async ({ value }) => value };
+  const previous = { method: async ({ old }) => old };
+  localApi.changeUnit('profile.10', 'get', latest);
+  localApi.changeUnit('profile.1', 'get', previous);
+  const unit = localApi.collection.profile;
+  const methods = unit[unit.default];
+  const signature = () => localApi.signatures['profile.' + unit.default];
+  assert.strictEqual(methods.get, latest);
+  assert.strictEqual(target.sandbox.api.profile.get, latest.method);
+  assert.deepStrictEqual(signature().get, ['value']);
+
+  localApi.delete(path.join(localApi.path, 'profile.10', 'get.js'));
+  assert.strictEqual(methods.get, previous);
+  assert.strictEqual(target.sandbox.api.profile.get, previous.method);
+  assert.deepStrictEqual(signature().get, ['old']);
+
+  localApi.delete(path.join(localApi.path, 'profile', 'get.js'));
+  assert.strictEqual(methods.get, undefined);
+  assert.strictEqual(target.sandbox.api.profile.get, undefined);
+  assert.strictEqual(signature().get, undefined);
 });

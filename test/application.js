@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const { EventEmitter } = require('node:events');
 const wt = require('node:worker_threads');
+const { Api } = require('../lib/api.js');
 const cwd = process.cwd();
 
 wt.workerData = { id: 0, kind: 'server', root: cwd, path: cwd, port: 8000 };
@@ -102,6 +103,40 @@ test('lib/application - should restrict methods by transport', () => {
   );
 
   delete application.api.collection.transport;
+});
+
+test('lib/application - should resolve latest API methods', () => {
+  const target = { sandbox: { api: {} }, absolute: (name) => name };
+  target.api = new Api('api', target);
+  const get = { method: async () => 'get', transports: ['http'] };
+  const update = { method: async ({ value }) => value, transports: ['ws'] };
+  target.api.changeUnit('profile.2', 'update', update);
+  target.api.changeUnit('profile.1', 'get', get);
+  const { signatures } = target.api;
+
+  for (const name of ['profile', 'profile.*']) {
+    assert.deepStrictEqual(application.introspect.call(target, [name]), {
+      profile: {
+        get: signatures['profile.1'].get,
+        update: signatures['profile.2'].update,
+      },
+    });
+  }
+  assert.deepStrictEqual(application.introspect.call(target, ['profile.1']), {
+    profile: signatures['profile.1'],
+  });
+  assert.deepStrictEqual(Object.keys(target.api.collection.profile), [
+    '1',
+    '2',
+    'default',
+  ]);
+
+  const getMethod = (...args) => application.getMethod.call(target, ...args);
+  assert.strictEqual(getMethod('profile', '*', 'get', 'http'), get);
+  assert.strictEqual(getMethod('profile', '*', 'update', 'ws'), update);
+  assert.strictEqual(getMethod('profile', '*', 'update', 'http'), null);
+  assert.strictEqual(getMethod('profile', '1', 'get', 'http'), get);
+  assert.strictEqual(getMethod('profile', '2', 'get', 'http'), null);
 });
 
 test('lib/application - documentation includes event catalogs', async (t) => {
