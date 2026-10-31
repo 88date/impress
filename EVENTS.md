@@ -119,13 +119,16 @@ are application infrastructure and are not configured by Impress.
 
 With `server.events: true`, Impress creates the stream if it is missing before
 starting subscribers, even when no subscribers are declared. It defaults to
-`EVENTS`, captures `events.>` and uses file storage, limits retention and one
-replica. Limits retention allows independent subscribers to read the same
+`EVENTS`, captures `events.>` and uses file storage and limits retention.
+`nats.jetstream.replicas` sets the replica count, defaulting to 1 for a new
+stream. Limits retention allows independent subscribers to read the same
 events and durable consumers to resume after downtime.
 
-Existing streams are reused without changing their settings or stored
-messages. Set custom storage, replication and retention limits through
-infrastructure management. JetStream must be enabled for the NATS account.
+For existing streams, Impress updates the replica count only when `replicas`
+is explicitly configured and `server.events: true`. Omitting `replicas`
+preserves the current count. Other stream settings and stored messages are
+preserved. Set custom storage and retention limits through infrastructure
+management. JetStream must be enabled for the NATS account.
 
 The application can select another stream name and a consumer namespace:
 
@@ -139,32 +142,38 @@ The application can select another stream name and a consumer namespace:
     jetstream: {
       stream: 'EVENTS',
       consumerPrefix: 'impress',
+      replicas: 1,
     },
   },
   events: true,
 });
 ```
 
+Use `replicas: 3` for a cluster with at least three JetStream nodes. Configure
+the same replica count on all instances that manage this stream.
+
 These fields belong to `server` configuration. Set `server.events: true` on
 instances that create the stream and manage subscriber consumers. Every server
 worker in these instances can create the missing stream and consumers and
-update consumer delivery options, independently of its discovery role.
+update stream replication and consumer delivery options, independently of its
+discovery role.
 Replicas use the same stream and consumer names and delivery options. Workers
 with `server.events: false` only attach to matching existing consumers. If the
-stream or a consumer is missing, or a consumer awaits an options update, they
-retry once per second in the background.
+stream or a consumer is missing, or the configured replication or consumer
+options await an update, they retry once per second in the background.
 
 `nats.servers` is an array of addresses, including when there is only one
 server. For a comma-separated environment variable, configure it as
 `process.env.NATS_SERVERS?.split(',').map((server) => server.trim())`.
 
-The `server.events` flag controls stream creation and consumer creation and
-updates. With `false`, server workers still consume using existing consumers.
+The `server.events` flag controls stream creation, replication updates and
+consumer creation and updates. With `false`, server workers still consume
+using existing consumers.
 Outbox publication and catalog discovery continue independently of this flag.
 
 NATS permissions must allow reading stream and consumer information, pulling
 messages and acknowledging them. Managing instances also need permission to
-create the stream and to create and update consumers. Permission and creation
+create and update the stream and consumers. Permission, creation and update
 errors are propagated; they are not treated as missing resources.
 
 Only server workers consume events. Regular workers and balancers can publish

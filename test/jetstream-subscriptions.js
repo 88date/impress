@@ -72,10 +72,14 @@ test('JetStream - instances share readable durable names', () => {
 });
 
 test('JetStream - only owner creates a missing stream', async () => {
-  for (const config of [{}, { stream: 'CUSTOM_EVENTS' }]) {
+  const cases = [
+    [{}, 'EVENTS', 1],
+    [{ replicas: 3 }, 'EVENTS', 3],
+    [{ stream: 'CUSTOM_EVENTS', replicas: 3 }, 'CUSTOM_EVENTS', 3],
+  ];
+  for (const [config, stream, replicas] of cases) {
     const owner = createTransport(true, config);
     const passive = createTransport(false, config);
-    const stream = config.stream ?? 'EVENTS';
     const calls = [];
     const manager = {
       streams: {
@@ -98,7 +102,7 @@ test('JetStream - only owner creates a missing stream', async () => {
         subjects: ['events.>'],
         storage: 'file',
         retention: 'limits',
-        num_replicas: 1,
+        num_replicas: replicas,
       },
     ]);
   }
@@ -106,7 +110,8 @@ test('JetStream - only owner creates a missing stream', async () => {
 
 test('JetStream - reuses existing stream settings and messages', async () => {
   for (const managesTopology of [true, false]) {
-    const transport = createTransport(managesTopology);
+    const config = {};
+    const transport = createTransport(managesTopology, config);
     const info = {
       config: { name: 'EVENTS', num_replicas: 3, max_bytes: 1000000 },
       state: { messages: 42 },
@@ -123,7 +128,54 @@ test('JetStream - reuses existing stream settings and messages', async () => {
       },
     });
     assert.strictEqual(await transport.ensureStream(), true);
+    config.replicas = 3;
+    assert.strictEqual(await transport.ensureStream(), true);
   }
+});
+
+test('JetStream - only owner updates configured stream replicas', async () => {
+  const config = { stream: 'CUSTOM_EVENTS', replicas: 3 };
+  const owner = createTransport(true, config);
+  const passive = createTransport(false, config);
+  const calls = [];
+  const current = { num_replicas: 1, max_bytes: 1000000 };
+  const manager = {
+    streams: {
+      info: async () => ({ config: { ...current } }),
+      update: async (...args) => calls.push(args),
+      add: () => assert.fail('Unexpected stream creation'),
+      delete: () => assert.fail('Unexpected stream deletion'),
+    },
+  };
+  const getJetStream = async () => ({ manager });
+  owner.nats.getJetStream = getJetStream;
+  passive.nats.getJetStream = getJetStream;
+  assert.strictEqual(await passive.ensureStream(), false);
+  assert.deepStrictEqual(calls, []);
+  assert.strictEqual(await owner.ensureStream(), true);
+  assert.deepStrictEqual(calls, [['CUSTOM_EVENTS', { num_replicas: 3 }]]);
+  current.num_replicas = 3;
+  assert.strictEqual(await passive.ensureStream(), true);
+  assert.strictEqual(await owner.ensureStream(), true);
+  assert.strictEqual(calls.length, 1);
+});
+
+test('JetStream - propagates stream replication update errors', async () => {
+  const transport = createTransport(true, { replicas: 3 });
+  const failure = new Error('Cannot update replicas');
+  transport.nats.getJetStream = async () => ({
+    manager: {
+      streams: {
+        info: async () => ({ config: { num_replicas: 1 } }),
+        update: async () => {
+          throw failure;
+        },
+        add: () => assert.fail('Unexpected stream creation'),
+        delete: () => assert.fail('Unexpected stream deletion'),
+      },
+    },
+  });
+  await assert.rejects(transport.ensureStream(), (error) => error === failure);
 });
 
 test('JetStream - propagates stream lookup and creation errors', async () => {

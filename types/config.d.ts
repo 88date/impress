@@ -69,6 +69,7 @@ export interface NatsConfig {
   jetstream?: {
     stream?: string;
     consumerPrefix?: string;
+    replicas?: number;
   };
   discovery: {
     maxWait: number;

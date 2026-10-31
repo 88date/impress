@@ -35,6 +35,7 @@
     jetstream: {
       stream: 'EVENTS',
       consumerPrefix: 'impress',
+      replicas: 1,
     },
     discovery: {
       maxWait: 1000,
