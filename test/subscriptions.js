@@ -43,6 +43,8 @@ const createManager = () => {
   const transport = {
     enabled: true,
     available: true,
+    managesTopology: true,
+    ensureStream: async () => transport.available,
     createBinding: (contract) => ({
       subscriberName: contract.subscriberName,
       eventName: contract.eventName,
@@ -116,6 +118,64 @@ test('subscriptions - register publishers before startup', async () => {
 
   await manager.start();
   assert.strictEqual(manager.active.size, 1);
+  await manager.stop();
+});
+
+test('subscriptions - prepare stream without subscribers', async () => {
+  const { manager, transport } = createManager();
+  let prepared = false;
+  transport.ensureStream = async () => {
+    prepared = true;
+    return true;
+  };
+  await manager.start();
+  assert.strictEqual(prepared, true);
+  assert.strictEqual(manager.active.size, 0);
+  await manager.stop();
+});
+
+test('subscriptions - idle passive server skips JetStream', async () => {
+  const { manager, transport } = createManager();
+  transport.managesTopology = false;
+  transport.ensureStream = () => assert.fail('Unexpected JetStream access');
+  await manager.start();
+  assert.strictEqual(manager.retryTimer, null);
+  await manager.stop();
+});
+
+test('subscriptions - wait for stream before binding consumers', async () => {
+  const { manager, transport, calls } = createManager();
+  const preparing = Promise.withResolvers();
+  const entered = Promise.withResolvers();
+  transport.ensureStream = () => {
+    entered.resolve();
+    return preparing.promise;
+  };
+  await manager.registerSubscriber(createSubscriber());
+  const starting = manager.start();
+  await entered.promise;
+  assert.deepStrictEqual(calls, []);
+  preparing.resolve(false);
+  await starting;
+  assert.deepStrictEqual(calls, []);
+  assert.ok(manager.retryTimer);
+  transport.ensureStream = async () => true;
+  await manager.synchronize();
+  assert.strictEqual(manager.active.size, 1);
+  assert.strictEqual(manager.retryTimer, null);
+  await manager.stop();
+});
+
+test('subscriptions - propagate stream failure before binding', async () => {
+  const { manager, transport, calls } = createManager();
+  const failure = new Error('Cannot create stream');
+  transport.ensureStream = async () => {
+    throw failure;
+  };
+  await manager.registerSubscriber(createSubscriber());
+  await assert.rejects(manager.start(), (error) => error === failure);
+  assert.strictEqual(manager.started, false);
+  assert.deepStrictEqual(calls, []);
   await manager.stop();
 });
 

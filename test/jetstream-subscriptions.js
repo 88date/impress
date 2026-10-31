@@ -71,6 +71,94 @@ test('JetStream - instances share readable durable names', () => {
   assert.strictEqual(first.eventSubject, 'events.chat.1.message.created');
 });
 
+test('JetStream - only owner creates a missing stream', async () => {
+  for (const config of [{}, { stream: 'CUSTOM_EVENTS' }]) {
+    const owner = createTransport(true, config);
+    const passive = createTransport(false, config);
+    const stream = config.stream ?? 'EVENTS';
+    const calls = [];
+    const manager = {
+      streams: {
+        info: async (name) => {
+          assert.strictEqual(name, stream);
+          throw Object.assign(new Error('Stream not found'), { code: 10059 });
+        },
+        add: async (options) => calls.push(options),
+      },
+    };
+    const getJetStream = async () => ({ manager });
+    owner.nats.getJetStream = getJetStream;
+    passive.nats.getJetStream = getJetStream;
+    assert.strictEqual(await passive.ensureStream(), false);
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(await owner.ensureStream(), true);
+    assert.deepStrictEqual(calls, [
+      {
+        name: stream,
+        subjects: ['events.>'],
+        storage: 'file',
+        retention: 'limits',
+        num_replicas: 1,
+      },
+    ]);
+  }
+});
+
+test('JetStream - reuses existing stream settings and messages', async () => {
+  for (const managesTopology of [true, false]) {
+    const transport = createTransport(managesTopology);
+    const info = {
+      config: { name: 'EVENTS', num_replicas: 3, max_bytes: 1000000 },
+      state: { messages: 42 },
+    };
+    transport.nats.getJetStream = async () => ({
+      manager: {
+        streams: {
+          info: async () => structuredClone(info),
+          add: () => assert.fail('Unexpected stream creation'),
+          update: () => assert.fail('Unexpected stream update'),
+          delete: () => assert.fail('Unexpected stream deletion'),
+          purge: () => assert.fail('Unexpected stream purge'),
+        },
+      },
+    });
+    assert.strictEqual(await transport.ensureStream(), true);
+  }
+});
+
+test('JetStream - propagates stream lookup and creation errors', async () => {
+  for (const operation of ['info', 'add']) {
+    const transport = createTransport();
+    const failure = new Error('Permission denied');
+    const manager = {
+      streams: {
+        info: async () => {
+          throw Object.assign(new Error('Stream not found'), { code: 10059 });
+        },
+        add: () => assert.fail('Unexpected stream creation'),
+      },
+    };
+    manager.streams[operation] = async () => {
+      throw failure;
+    };
+    transport.nats.getJetStream = async () => ({ manager });
+    await assert.rejects(
+      transport.ensureStream(),
+      (error) => error === failure,
+    );
+  }
+});
+
+test('JetStream - stream preparation waits for a connection', async () => {
+  const transport = createTransport();
+  transport.nats.getJetStream = () => assert.fail('Connection is unavailable');
+  transport.nats.connection = null;
+  assert.strictEqual(await transport.ensureStream(), false);
+  transport.nats.connection = {};
+  transport.nats.isStopping = true;
+  assert.strictEqual(await transport.ensureStream(), false);
+});
+
 test('JetStream - only owner creates missing consumers', async () => {
   const owner = createTransport();
   const passive = createTransport(false);
