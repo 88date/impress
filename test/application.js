@@ -38,7 +38,6 @@ test('lib/application - should have correct application properties', () => {
   assert.strictEqual(application.events, null);
   assert.strictEqual(application.subscribers, null);
   assert.strictEqual(application.nats, null);
-  assert.strictEqual(application.pgboss, null);
   assert.deepStrictEqual(application.starts, []);
   assert.strictEqual(application.config, null);
   assert.strictEqual(application.logger, null);

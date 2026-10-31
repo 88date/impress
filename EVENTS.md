@@ -4,7 +4,7 @@ Events use PostgreSQL outbox → Debezium → NATS JetStream → subscribers.
 Impress writes outbox records, creates the missing JetStream stream and
 consumes messages. The application owns its database migrations and Debezium
 deployment.
-pg-boss is used only for tasks and cron.
+Tasks and cron also use NATS JetStream, in a separate stream; see [TASKS.md](TASKS.md).
 
 ## Declaring and publishing
 
@@ -181,14 +181,14 @@ through the outbox. NATS remains the transport for RPC and event discovery.
 
 The subscriber's `deliverPolicy` selects where a new consumer starts reading:
 
-| Mode | Starting point |
-| --- | --- |
-| `all` | All retained matching messages. |
-| `new` | Messages published after the consumer is created; the default. |
-| `last` | The last retained matching message. |
-| `last_per_subject` | The last retained message for each matching subject. |
-| `by_start_sequence` | Stream sequence `startSequence`, inclusive. |
-| `by_start_time` | Stream timestamp `startTime`, inclusive. |
+| Mode                | Starting point                                                 |
+| ------------------- | -------------------------------------------------------------- |
+| `all`               | All retained matching messages.                                |
+| `new`               | Messages published after the consumer is created; the default. |
+| `last`              | The last retained matching message.                            |
+| `last_per_subject`  | The last retained message for each matching subject.           |
+| `by_start_sequence` | Stream sequence `startSequence`, inclusive.                    |
+| `by_start_time`     | Stream timestamp `startTime`, inclusive.                       |
 
 All modes continue with subsequent messages. `startSequence` is a stream
 sequence number, not an outbox event ID. `startTime` is an RFC 3339 string,
@@ -293,8 +293,16 @@ out. Removing a subscriber stops its local handler but does not delete the
 durable consumer or its pending messages. Retiring old consumers is an
 explicit infrastructure operation.
 
-Startup fails if declarations cannot be read, parsed or validated. A failed
-file reload logs the error and retains the last working declaration.
+Subscriber declarations require a non-empty `event` string and a `method`
+function. Startup fails if declarations cannot be read, parsed or validated.
+A file reload that fails these checks logs the error and retains the last
+working declaration and handler.
+
+During synchronization, a failure to bind or remove one subscriber does not
+prevent other subscribers from being updated. Each failure is logged, and
+failed operations are retried in the background. Binding failures during
+startup still fail startup and stop any subscribers already started in that
+attempt.
 
 ## Migration
 
@@ -317,8 +325,8 @@ consumers and their positions are not renamed or removed automatically. A
 consumer with a new name uses its configured initial delivery policy.
 
 Old pg-boss event queues and their pending jobs are not migrated or deleted
-automatically. Drain or migrate them as a separate deployment step. pg-boss
-configuration and its dependency remain for `application/tasks` and cron.
+automatically. Drain or migrate them as a separate deployment step. The pg-boss
+dependency and configuration have also been removed from tasks and cron.
 
 ## Runtime modules
 
@@ -332,8 +340,8 @@ The event subsystem lives in `lib/events/`:
 - `consumer.js` pulls messages, dispatches handlers and acknowledges delivery.
 
 `lib/nats.js` owns the shared NATS connection and JetStream clients.
-`lib/pgboss.js` serves tasks. Catalogs and their shared `DiscoveryWorker` live
-in `lib/catalog.js`.
+`lib/scheduler.js` manages task schedules and `lib/task-consumer.js` receives
+task jobs. Catalogs and their shared `DiscoveryWorker` live in `lib/catalog.js`.
 
 The `events` field from `await application.getDocumentation()` contains local
 declarations and discovered remote metadata. Local declarations take
@@ -342,6 +350,9 @@ all events use the `nats` transport.
 
 Optional integration tests use `NATS_TEST_SERVERS` and
 `NATS_TEST_CREDENTIALS` for NATS with JetStream. They create and remove a
-unique test stream. The event test simulates CDC publication; it does not
-start or verify Debezium. `OUTBOX_TEST_CONNECTION_STRING` enables PostgreSQL
-autocommit, commit and rollback tests in a unique temporary schema.
+unique test stream. Event tests prefix subjects with an isolated
+`impress_test.<suffix>.` namespace, so they can run alongside an existing
+`EVENTS` stream without changing it. They simulate the database adapter and
+CDC publication; they do not start or verify Debezium.
+`OUTBOX_TEST_CONNECTION_STRING` enables PostgreSQL autocommit, commit and
+rollback tests in a unique temporary schema.

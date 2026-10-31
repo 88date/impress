@@ -52,6 +52,7 @@ const createManager = () => {
       retryLimit: contract.retryLimit,
       retryDelay: contract.retryDelay,
       timeout: contract.timeout,
+      deliverPolicy: contract.deliverPolicy,
     }),
     bind: async (binding, dispatch) => {
       const handle = {
@@ -251,6 +252,104 @@ test('subscriptions - rebind on event or options changes', async () => {
   await manager.stop();
 });
 
+test('subscriptions - isolate conflicts during reload', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const { manager, transport, calls } = createManager();
+  t.after(() => manager.stop());
+  const first = createSubscriber({ deliverPolicy: 'new' });
+  const second = createSubscriber({
+    subscriberName: 'audit:1:message:created',
+    method: () => 'old',
+  });
+  const third = createSubscriber({
+    subscriberName: 'search:1:message:created',
+    method: () => 'new',
+  });
+  const conflict = new Error('Conflicting JetStream consumer');
+  const bind = transport.bind;
+  let failures = 0;
+  transport.bind = async (binding, dispatch) => {
+    if (
+      binding.subscriberName === first.subscriberName &&
+      binding.deliverPolicy === 'all'
+    ) {
+      failures++;
+      throw conflict;
+    }
+    return bind(binding, dispatch);
+  };
+  await manager.registerSubscriber(first);
+  await manager.registerSubscriber(second);
+  await manager.start();
+  const original = manager.active.get(second.subscriberName).handle;
+
+  await manager.registerSubscriber({ ...first, deliverPolicy: 'all' });
+  await manager.registerSubscriber({ ...second, method: () => 'updated' });
+  await manager.registerSubscriber(third);
+  assert.strictEqual(
+    manager.active.get(second.subscriberName).handle,
+    original,
+  );
+  assert.strictEqual(await original.dispatch({ payload: {} }), 'updated');
+  const added = manager.active.get(third.subscriberName).handle;
+  assert.strictEqual(await added.dispatch({ payload: {} }), 'new');
+  assert.ok(manager.retryTimer);
+  const error = calls.find(
+    (call) => call[1] === 'Failed to synchronize event subscribers',
+  )[2];
+  assert.strictEqual(error.constructor, Error);
+  assert.strictEqual(error.cause, conflict);
+
+  const attempts = failures;
+  t.mock.timers.tick(1000);
+  await manager.operation;
+  assert.strictEqual(failures, attempts + 1);
+  assert.ok(manager.retryTimer);
+  assert.strictEqual(manager.active.get(third.subscriberName).handle, added);
+
+  await manager.registerSubscriber(first);
+  assert.strictEqual(manager.active.size, 3);
+  assert.strictEqual(manager.retryTimer, null);
+});
+
+test('subscriptions - isolate failed removals', async (t) => {
+  const { manager, transport } = createManager();
+  const first = createSubscriber();
+  const second = createSubscriber({
+    subscriberName: 'audit:1:message:created',
+  });
+  await manager.registerSubscriber(first);
+  await manager.registerSubscriber(second);
+  await manager.start();
+  const retained = manager.active.get(first.subscriberName).handle;
+  const removed = manager.active.get(second.subscriberName).handle;
+  const stop = retained.stop;
+  retained.stop = async () => {
+    throw new Error('Cannot drain subscriber');
+  };
+  t.after(async () => {
+    retained.stop = stop;
+    await manager.stop();
+  });
+
+  await manager.removeSubscriber(first.subscriberName);
+  transport.enabled = false;
+  transport.ensureStream = () => assert.fail('Unexpected JetStream access');
+  await manager.removeSubscriber(second.subscriberName);
+  assert.strictEqual(removed.running, false);
+  assert.strictEqual(manager.active.size, 1);
+  assert.ok(manager.retryTimer);
+
+  transport.enabled = true;
+  transport.managesTopology = false;
+  await manager.synchronize();
+  assert.ok(manager.retryTimer);
+  retained.stop = stop;
+  await manager.synchronize();
+  assert.strictEqual(manager.active.size, 0);
+  assert.strictEqual(manager.retryTimer, null);
+});
+
 test('subscriptions - wait for connection and consumer', async () => {
   const { manager, transport } = createManager();
   const subscriber = createSubscriber();
@@ -274,11 +373,57 @@ test('subscriptions - wait for connection and consumer', async () => {
 test('subscriptions - propagate bind failures at startup', async () => {
   const { manager, transport } = createManager();
   await manager.registerSubscriber(createSubscriber());
+  const failure = new Error('JetStream unavailable');
   transport.bind = async () => {
-    throw new Error('JetStream unavailable');
+    throw failure;
   };
-  await assert.rejects(manager.start(), /JetStream unavailable/);
+  await assert.rejects(manager.start(), {
+    message: 'Failed to reconcile event subscribers',
+    cause: failure,
+  });
   assert.strictEqual(manager.started, false);
+  await manager.stop();
+});
+
+test('subscriptions - clean up bindings after startup failures', async () => {
+  const { manager, transport, calls } = createManager();
+  const first = createSubscriber();
+  const second = createSubscriber({
+    subscriberName: 'audit:1:message:created',
+  });
+  const third = createSubscriber({
+    subscriberName: 'search:1:message:created',
+  });
+  const failures = new Map([
+    [first.subscriberName, new Error('First consumer unavailable')],
+    [third.subscriberName, new Error('Third consumer unavailable')],
+  ]);
+  const bind = transport.bind;
+  transport.bind = async (binding, dispatch) => {
+    const failure = failures.get(binding.subscriberName);
+    if (failure) throw failure;
+    return bind(binding, dispatch);
+  };
+  await manager.registerSubscriber(first);
+  await manager.registerSubscriber(second);
+  await manager.registerSubscriber(third);
+
+  await assert.rejects(manager.start(), (error) => {
+    assert.strictEqual(error.constructor, Error);
+    assert.strictEqual(error.cause, failures.get(first.subscriberName));
+    return true;
+  });
+  assert.deepStrictEqual(
+    calls.filter((call) => call[0] !== 'error').map((call) => call[0]),
+    ['bind', 'stop'],
+  );
+  assert.deepStrictEqual(
+    calls.filter((call) => call[0] === 'error').map((call) => call[1]),
+    [...failures.values()],
+  );
+  assert.strictEqual(manager.started, false);
+  assert.strictEqual(manager.active.size, 0);
+  assert.strictEqual(manager.retryTimer, null);
   await manager.stop();
 });
 

@@ -25,7 +25,7 @@
   scheduler: {
     enabled: false,
     active: false,
-    notify: false,
+    stream: 'TASKS',
   },
   events: false,
   nats: {
@@ -40,12 +40,6 @@
     discovery: {
       maxWait: 1000,
     },
-  },
-  pgboss: {
-    enabled: false,
-    logEvents: ['error', 'warning'],
-    connectionString: 'postgres://127.0.0.1/impress',
-    max: 5,
   },
   centrifugo: {
     secret: 'test-secret',

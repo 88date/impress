@@ -1,7 +1,7 @@
 ({
   retryLimit: 3,
-  priority: 1,
-  localConcurrency: 1,
+  retryDelay: 1000,
+  maxMessages: 5,
   cron: '0 3 * * *',
   tz: 'Europe/Moscow',
   data: { automatic: true },

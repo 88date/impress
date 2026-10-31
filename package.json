@@ -78,8 +78,7 @@
     "metaskills": "^1.0.4",
     "metautil": "^5.5.2",
     "metavm": "^1.4.5",
-    "metawatch": "^1.2.5",
-    "pg-boss": "^12.29.0"
+    "metawatch": "^1.2.5"
   },
   "devDependencies": {
     "@types/node": "^25.5.0",

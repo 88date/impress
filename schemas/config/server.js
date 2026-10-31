@@ -25,7 +25,9 @@
   scheduler: {
     enabled: 'boolean',
     active: 'boolean',
-    notify: '?boolean',
+    stream: '?string',
+    consumerPrefix: '?string',
+    replicas: '?number',
   },
   events: 'boolean',
   nats: {
@@ -37,7 +39,6 @@
       maxWait: 'number',
     },
   },
-  pgboss: 'json',
   centrifugo: {
     secret: '?string',
   },

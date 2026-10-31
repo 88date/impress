@@ -20,13 +20,14 @@ test('schemas/config - should validate config schemas correctly', async () => {
   assert.strictEqual(server.check(config.server).valid, true);
   const scheduler = { enabled: true, active: false };
   assert.strictEqual(server.check({ ...config.server, scheduler }).valid, true);
-  for (const notify of [true, false]) {
-    const options = { ...config.server, scheduler: { ...scheduler, notify } };
-    assert.strictEqual(server.check(options).valid, true);
-  }
+  const options = {
+    ...config.server,
+    scheduler: { ...scheduler, stream: 'TASKS', replicas: 3 },
+  };
+  assert.strictEqual(server.check(options).valid, true);
   const invalid = {
     ...config.server,
-    scheduler: { ...scheduler, notify: 'true' },
+    scheduler: { ...scheduler, replicas: '3' },
   };
   assert.strictEqual(server.check(invalid).valid, false);
 
@@ -41,9 +42,6 @@ test('schemas/config - should validate config schemas correctly', async () => {
     events: 'true',
   };
   assert.strictEqual(server.check(invalidEvents).valid, false);
-
-  const invalidPgboss = { ...config.server, pgboss: 'enabled' };
-  assert.strictEqual(server.check(invalidPgboss).valid, false);
 
   const invalidCentrifugo = {
     ...config.server,

@@ -15,7 +15,6 @@ wt.workerData = {
 };
 
 const { Nats } = require('../lib/nats.js');
-const { Pgboss } = require('../lib/pgboss.js');
 const {
   EventPublisher,
   EventLoader,
@@ -38,7 +37,6 @@ const createConfig = (manageEvents = false) => ({
     },
     scheduler: {
       enabled: true,
-      notify: true,
     },
     events: manageEvents,
     nats: {
@@ -46,9 +44,6 @@ const createConfig = (manageEvents = false) => ({
       discovery: {
         maxWait: 100,
       },
-    },
-    pgboss: {
-      enabled: true,
     },
   },
   sessions: {},
@@ -70,9 +65,8 @@ test('application events - initializes transports by worker kind', () => {
   for (const kind of ['server', 'worker', 'balancer']) {
     initialize(kind);
 
-    const { pgboss, nats, eventPublisher, subscriptions, events, subscribers } =
+    const { nats, eventPublisher, subscriptions, events, subscribers } =
       application;
-    assert.strictEqual(pgboss instanceof Pgboss, true);
     assert.strictEqual(nats instanceof Nats, true);
     assert.strictEqual(eventPublisher instanceof EventPublisher, true);
     assert.strictEqual(subscriptions instanceof SubscriptionManager, true);
@@ -203,9 +197,6 @@ test('application events - follows lifecycle order', async (t) => {
   wt.workerData.kind = 'worker';
 
   const calls = [];
-  t.mock.method(application.pgboss, 'start', async () => {
-    calls.push('pgboss.start');
-  });
   t.mock.method(application.nats, 'start', async () => {
     calls.push('nats.start');
   });
@@ -215,11 +206,7 @@ test('application events - follows lifecycle order', async (t) => {
 
   await application.start();
 
-  assert.deepStrictEqual(calls, [
-    'pgboss.start',
-    'nats.start',
-    'subscriptions.start',
-  ]);
+  assert.deepStrictEqual(calls, ['nats.start', 'subscriptions.start']);
 
   calls.length = 0;
   t.mock.method(application.subscriptions, 'stop', async () => {
@@ -227,9 +214,6 @@ test('application events - follows lifecycle order', async (t) => {
   });
   t.mock.method(application.nats, 'close', async () => {
     calls.push('nats.close');
-  });
-  t.mock.method(application.pgboss, 'stop', async (timeout) => {
-    calls.push(['pgboss.stop', timeout]);
   });
   for (const target of [
     application.modules,
@@ -245,11 +229,7 @@ test('application events - follows lifecycle order', async (t) => {
 
   await application.shutdown();
 
-  assert.deepStrictEqual(calls, [
-    'subscriptions.stop',
-    'nats.close',
-    ['pgboss.stop', 5000],
-  ]);
+  assert.deepStrictEqual(calls, ['subscriptions.stop', 'nats.close']);
 });
 
 test('application events - load failure prevents startup', async (t) => {

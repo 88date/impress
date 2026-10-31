@@ -56,45 +56,41 @@ test('lib/tasks - should load tasks through Code', async () => {
       name: 'tasks/cleanup',
       path: 'cleanup',
       cron: '0 3 * * *',
+      tz: 'Europe/Moscow',
       data: { automatic: true },
-      queue: { retryLimit: 3 },
-      options: { priority: 1, tz: 'Europe/Moscow' },
-      worker: { localConcurrency: 1 },
+      retryLimit: 3,
+      retryDelay: 1000,
+      maxMessages: 5,
+      timeout: 1000,
     },
     {
       name: 'tasks/reports/daily',
       path: 'reports/daily',
       cron: '0 8 * * *',
+      tz: 'UTC',
       data: {},
-      queue: {},
-      options: {},
-      worker: {},
+      retryLimit: 2,
+      retryDelay: 0,
+      maxMessages: 5,
+      timeout: 1000,
     },
   ]);
 });
 
-test('lib/tasks - should reject nested options and invalid tasks', () => {
-  const method = async () => {};
-  const cron = '0 3 * * *';
-  const cases = [
-    [{ method }, 'cron expected'],
-    [{ cron }, 'method expected'],
-    [{ cron, method, notify: true }, 'use server.scheduler.notify'],
-    [{ cron, method, notify: false }, 'use server.scheduler.notify'],
-    [{ cron, method, queue: { retryLimit: 3 } }, 'queue must be flattened'],
-    [{ cron, method, job: { priority: 1 } }, 'job must be flattened'],
-    [
-      { cron, method, worker: { localConcurrency: 2 } },
-      'worker must be flattened',
-    ],
-    [{ method, schedule: { cron } }, 'schedule must be flattened'],
-  ];
-
-  for (const [unit, reason] of cases) {
-    assert.throws(() => declarations({ cleanup: unit }), {
-      message: `Task "cleanup": ${reason}`,
-    });
-  }
+test('lib/tasks - should send serializable task settings', () => {
+  const cleanup = {
+    cron: '0 3 * * *',
+    tz: 'Europe/Moscow',
+    maxMessages: 10,
+    timeout: 60000,
+    method: async () => {},
+    onCompleted: async () => {},
+  };
+  const [declaration] = structuredClone(declarations({ cleanup }));
+  assert.strictEqual(declaration.timeout, 60000);
+  assert.strictEqual(declaration.maxMessages, 10);
+  assert.strictEqual(declaration.method, undefined);
+  assert.strictEqual(declaration.onCompleted, undefined);
 });
 
 test('lib/tasks - should update declarations after deletion', async () => {
@@ -157,4 +153,21 @@ test('lib/tasks - should execute failure handler and reject', async () => {
     message: 'Cleanup failed',
   });
   assert.deepStrictEqual(calls, [['Cleanup failed', 'job-2']]);
+});
+
+test('lib/tasks - callback errors preserve successful results', async () => {
+  const errors = [];
+  const application = createApplication();
+  application.console = { error: (...args) => errors.push(args) };
+  const tasks = new Tasks(application, async () => {});
+  tasks.tree.cleanup = {
+    method: async () => 'done',
+    onCompleted: async () => {
+      throw new Error('Notification failed');
+    },
+    onFailed: async () => assert.fail('Unexpected failure callback'),
+  };
+  const result = await tasks.execute({ path: 'cleanup' }, { data: {} });
+  assert.strictEqual(result, 'done');
+  assert.strictEqual(errors.length, 1);
 });

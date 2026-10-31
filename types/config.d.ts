@@ -1,8 +1,3 @@
-import type {
-  ConstructorOptions as PgbossOptions,
-  PgBossEventMap,
-} from 'pg-boss';
-
 export interface LogConfig {
   keepDays: number;
   writeInterval: number;
@@ -47,7 +42,6 @@ export interface ServerConfig {
   scheduler: SchedulerConfig;
   events: boolean;
   nats: NatsConfig;
-  pgboss: PgbossConfig;
   centrifugo: {
     secret?: string;
   };
@@ -79,14 +73,16 @@ export interface NatsConfig {
 export interface SchedulerConfig {
   enabled: boolean;
   active: boolean;
-  notify?: boolean;
+  /**
+   * Stream for schedules and pending tasks. Defaults to TASKS.
+   * Subjects are scoped to tasks.<stream>.>.
+   */
+  stream?: string;
+  /** Defaults to nats.jetstream.consumerPrefix or impress. */
+  consumerPrefix?: string;
+  /** New stream replicas. Defaults to nats.jetstream.replicas or 1. */
+  replicas?: number;
 }
-
-export type PgbossConfig = PgbossOptions & {
-  enabled: boolean;
-  /** pg-boss events written to the application log. */
-  logEvents?: Array<keyof PgBossEventMap>;
-};
 
 export interface SessionsConfig {
   sid: string;

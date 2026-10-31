@@ -16,7 +16,7 @@ const {
   EventCatalog,
   DiscoveryWorker,
 } = require('./lib/catalog.js');
-const { Pgboss, getPgbossConfig } = require('./lib/pgboss.js');
+const { Nats } = require('./lib/nats.js');
 const { Scheduler } = require('./lib/scheduler.js');
 const { request } = require('./lib/thread.js');
 
@@ -33,8 +33,6 @@ const CFG_OPTIONS = { mode: process.env.MODE, context: CONTEXT };
 const impress = {
   logger: null,
   config: null,
-  pgboss: null,
-  scheduler: null,
   close: () => {},
   finalization: false,
   initialization: true,
@@ -44,11 +42,32 @@ const impress = {
   startTimer: null,
 };
 
+const stopScheduler = async (app) => {
+  try {
+    await app.scheduler.stop(app.config.server.timeouts.stop);
+  } catch (error) {
+    impress.console.error('Can not stop task scheduler', error);
+  }
+  try {
+    await app.nats.close();
+  } catch (error) {
+    impress.console.error('Can not close task NATS connection', error);
+  }
+};
+
+const stopSchedulers = async () => {
+  const stopping = [];
+  for (const app of impress.applications.values()) {
+    stopping.push(stopScheduler(app));
+  }
+  await Promise.all(stopping);
+};
+
 const exit = async (message, code) => {
   if (impress.finalization) return;
   impress.finalization = true;
   impress.console.info(message);
-  await impress.pgboss?.stop(impress.config?.server?.timeouts?.stop);
+  await stopSchedulers();
   if (impress.logger && impress.logger.active) await impress.logger.close();
   process.exit(code);
 };
@@ -113,6 +132,7 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
       app.ready++;
       if (kind === 'worker') app.pool.release(worker);
       if (app.threads.size === app.ready) {
+        app.scheduler.start();
         clearTimeout(impress.startTimer);
         impress.initialization = false;
         impress.console.info(`App started: ${app.path}`);
@@ -172,7 +192,7 @@ const startWorker = async (app, kind, port, id = ++impress.lastWorkerId) => {
     tasks: async ({ declarations, port }) => {
       try {
         if (app.tasksThreadId === id) {
-          await impress.scheduler.synchronize(declarations, app.executeTask);
+          await app.scheduler.synchronize(declarations, app.executeTask);
         }
         port.postMessage({ status: 'done' });
       } catch (error) {
@@ -229,13 +249,6 @@ const loadApplication = async (root, dir, master) => {
     if (logger.active) impress.console = logger.console;
     impress.logger = logger;
     impress.config = config;
-    const pgboss = getPgbossConfig(
-      config.server.pgboss,
-      config.server.scheduler,
-    );
-    impress.pgboss = new Pgboss(pgboss, impress.console);
-    await impress.pgboss.start();
-    impress.scheduler = new Scheduler(config.server.scheduler, impress.pgboss);
   }
   const { balancer, ports = [], workers = {} } = config.server;
   const threads = new Map();
@@ -245,6 +258,12 @@ const loadApplication = async (root, dir, master) => {
   const eventCatalog = new EventCatalog(threads, discoveryWorker);
   const executeTask = (declaration, job) =>
     requestWorker(dir, pool, { name: 'task', declaration, job });
+  const nats = new Nats({ config, console: impress.console });
+  const scheduler = new Scheduler(
+    config.server.scheduler,
+    nats,
+    impress.console,
+  );
   const app = {
     root,
     path: dir,
@@ -257,11 +276,19 @@ const loadApplication = async (root, dir, master) => {
     ready: 0,
     tasksThreadId: null,
     executeTask,
+    nats,
+    scheduler,
   };
-  if (balancer) await startWorker(app, 'balancer', balancer);
-  for (const port of ports) await startWorker(app, 'server', port);
-  const poolSize = workers.pool || 0;
-  for (let i = 0; i < poolSize; i++) await startWorker(app, 'worker');
+  try {
+    await scheduler.initialize();
+    if (balancer) await startWorker(app, 'balancer', balancer);
+    for (const port of ports) await startWorker(app, 'server', port);
+    const poolSize = workers.pool || 0;
+    for (let i = 0; i < poolSize; i++) await startWorker(app, 'worker');
+  } catch (error) {
+    await stopScheduler(app);
+    throw error;
+  }
   impress.applications.set(dir, app);
 };
 
@@ -282,7 +309,7 @@ const loadApplications = async () => {
 };
 
 const stop = async (signal = 'SIGINT', code = 0) => {
-  await impress.pgboss?.stop(impress.config?.server?.timeouts?.stop);
+  await stopSchedulers();
   const portsClosed = new Promise((resolve) => {
     impress.console.info('Graceful shutdown in worker 0');
     const timeout = setTimeout(() => {

@@ -1,166 +1,163 @@
-# Tasks (pg-boss)
+# Tasks (NATS JetStream)
 
-Tasks live directly in `application/tasks`. There is no
-`.queue.js`: one file declares one queue, one cron schedule, and one handler.
+Task files live in `application/tasks`. NATS Server **2.14 or newer** with
+JetStream enabled is required for recurring cron schedules and time zones.
+Impress uses the existing NATS servers and credentials from `server.nats`.
 
-```text
-application/
-  tasks/
-    cleanup.js
-    updateCounters.js
-```
-
-## Task declaration
-
-```js
-/** @type {TaskDeclaration} */
+```javascript
 ({
-  retryLimit: 3,
-  retryDelay: 60,
-  retryBackoff: true,
-  expireInSeconds: 1800,
-  heartbeatSeconds: 60,
-  priority: 1,
-  localConcurrency: 1,
-  cron: '0 3 * * *',
+  cron: '30 0 * * *',
   tz: 'Europe/Moscow',
-  data: { automatic: true },
 
-  method: async (data, job) => {
-    await domain.cleanup.run(data);
-    return { completed: true, jobId: job.id };
+  method: async () => {
+    return await modules.statistic.usecase.calculateDailyCounts('2023-06-16');
   },
 
   onCompleted: async (result, job) => {
-    console.info(`Cleanup completed: ${job.id}`, result);
+    console.info(`Task ${job.id} completed`, result);
   },
 
   onFailed: async (reason, job) => {
-    console.error(`Cleanup failed: ${job.id}`, reason);
+    console.error(`Task ${job.id} failed`, reason);
   },
 });
 ```
 
-The relative file path identifies the task. Impress adds the `tasks/` prefix
-before using it as the pg-boss queue name. For example, `reports/daily.js`
-uses the `tasks/reports/daily` queue.
-
-All options are declared at the top level. Impress routes each option to the
-queue, scheduled job, consumer, or schedule according to its name. Nested
-`queue`, `job`, `worker`, and `schedule` blocks are not supported.
-
-`cron` and `method` are required. `tz` selects the schedule's time zone.
-`data`, `onCompleted`, and `onFailed` are optional.
-
-Queue settings:
-
-- `policy`, `partition`, `warningQueueSize`, `deadLetter`
-- `retryLimit`, `retryDelay`, `retryBackoff`, `retryDelayMax`
-- `expireInSeconds`, `retentionSeconds`, `deleteAfterSeconds`
-- `heartbeatSeconds`
-
-The active scheduler applies explicitly declared queue settings during startup
-and live reload. Existing queues and their jobs are preserved; only changed
-settings are passed to `updateQueue`. Omitting a setting preserves its stored
-value. Queue notifications are controlled globally by `server.scheduler.notify`.
-Set `deadLetter`, `retryDelayMax`, or `heartbeatSeconds` to `null` to clear them.
-`policy` and `partition` can only be set when creating a queue; changing either
-on an existing queue reports an error.
-
-Retry, expiration, retention, heartbeat, and dead letter settings are stored
-on the queue and inherited by scheduled jobs. Task declarations do not provide
-per-job overrides for these settings.
-
-Scheduled job settings:
-
-- `priority`
-- `singletonKey`, `singletonSeconds`, `singletonNextSlot`
-- `group`
-
-Consumer settings:
-
-- `pollingIntervalSeconds`, `notifyPollingIntervalSeconds`
-- `burstWhenReadyExceeds`, `burstWhenBatchFull`
-- `orderByCreatedOn`, `minPriority`, `maxPriority`
-- `localConcurrency`, `localGroupConcurrency`, `groupConcurrency`
-- `heartbeatRefreshSeconds`
+Five-field cron expressions are converted to six fields by adding `0` for
+seconds. Six-field expressions are passed through. `tz` is an IANA time zone,
+defaulting to `UTC`. Cron syntax is validated by NATS when the schedule is
+registered; task methods and option types are the developer's responsibility.
 
 ## Configuration
 
-The pg-boss connection is configured in `application/config/server.js`:
-
-```js
+```javascript
 ({
-  // Other server settings
-  pgboss: {
-    enabled: process.env.PG_BOSS_ENABLED === 'true',
-    logEvents: ['error', 'warning'],
-    connectionString: process.env.DATABASE_URL_PG,
-    ssl: {
-      caPath: 'application/cert/postgres.crt',
-      rejectUnauthorized: true,
-    },
+  nats: {
+    enabled: process.env.NATS_ENABLED === 'true',
+    servers: process.env.NATS_SERVERS?.split(',').map((server) =>
+      server.trim(),
+    ),
+    credentials: process.env.NATS_CREDENTIALS,
+    discovery: { maxWait: 1000 },
+    jetstream: { consumerPrefix: 'backend', replicas: 3 },
   },
-});
-```
-
-Relative `caPath` values are resolved from the application working directory
-and loaded before connecting.
-
-`server.pgboss.logEvents` selects the pg-boss events written to the
-application log. It defaults to `error` and `warning`. Add `wip`, `stopped`,
-`bam`, or `flow` when their diagnostic output is needed. An empty array
-disables pg-boss event logs while keeping a silent error listener so an
-unhandled EventEmitter error cannot terminate the process.
-
-`server.scheduler.notify` selects the task delivery mode. It defaults to
-`false` (polling). Setting it to `true` enables the pg-boss listener and queue
-notifications for all task queues. Task declarations do not accept `notify`;
-the loader reports an error directing you to `server.scheduler.notify`.
-
-When the task subsystem is enabled, Impress derives the shared client's
-`useListenNotify` option from `server.scheduler.notify`, taking precedence over
-the value in `config.server.pgboss`. When tasks are disabled, the pg-boss connection
-configuration is used as supplied.
-
-Notifications wake consumers when immediately available jobs are inserted.
-Polling remains as a fallback; future-dated jobs still rely on polling when
-they become available. The listener uses one dedicated PostgreSQL connection
-in the master thread in addition to the query pool. It requires a direct or
-session-pooled connection; PgBouncer transaction pooling does not support it.
-Logical replication is not required.
-
-Restart the application after changing `server.scheduler.notify`. The active
-scheduler updates the stored queue flags without recreating queues or jobs,
-even when the cron schedule is unchanged. Switching the global flag to `false`
-disables the listener and turns off task queue notifications during
-synchronization. Use the same global mode on all task-consuming instances.
-
-Only the designated instance should manage task declarations:
-
-```js
-// application/config/server.js
-({
-  // Other server settings
   scheduler: {
     enabled: process.env.SCHEDULER_ENABLED === 'true',
     active: process.env.SCHEDULER_ACTIVE === 'true',
-    notify: process.env.SCHEDULER_NOTIFY === 'true',
+    stream: 'TASKS',
   },
 });
 ```
 
-The `scheduler.enabled` setting controls the entire task subsystem. Disabled
-instances do not load task declarations, register consumers, or manage
-schedules. Every instance with `scheduler.enabled` and `config.server.pgboss.enabled`
-registers task consumers, so pg-boss can distribute jobs between application
-instances. Only the designated instance should set `scheduler.active` to
-create and remove schedules and update existing queue settings. Inactive
-instances may create a missing queue with its declared settings before
-registering a consumer, but do not change an existing queue.
+- `scheduler.enabled` enables task loading and consumption. It requires
+  `nats.enabled: true` and at least one regular application worker.
+- `scheduler.active` enables creation, updates, and removal of schedules and
+  updates to consumer settings. Instances with `active: false` still execute
+  tasks. At least one instance must manage schedules.
+- `scheduler.stream` defaults to `TASKS`, separate from the events stream.
+  Each task stream uses its own `tasks.<stream>.>` subject namespace.
+- `scheduler.consumerPrefix` defaults to `nats.jetstream.consumerPrefix`,
+  then `impress`. It namespaces both schedules and consumers.
+- `scheduler.replicas` defaults to `nats.jetstream.replicas`, then `1`.
+  It is used when creating the task stream; existing replication settings
+  are preserved. Three replicas require three JetStream nodes.
 
-Task files are loaded through the common `Code` loader. Only serializable
-declarations are sent to the master thread. Schedules are synchronized during
-startup and live reload. Deleting a task file removes its schedule, but does
-not delete its queue or stored jobs. The shared pg-boss client receives jobs in
-the master thread and delegates their methods to regular application workers.
+All enabled instances can create a missing task stream and missing consumers.
+The stream uses file storage, `workqueue` retention, subjects
+`tasks.<stream>.>` (by default `tasks.TASKS.>`), and
+`allow_msg_schedules: true`. Credentials need the corresponding JetStream
+management permissions. These operations happen when the application starts.
+
+## Multiple instances
+
+Instances of the same application must share the NATS account, stream, prefix,
+task paths, and task settings. For `reports/daily.js` with the default stream
+and prefix:
+
+- Schedule subject: `tasks.TASKS.impress.schedule.reports:daily`.
+- Execution subject: `tasks.TASKS.impress.run.reports:daily`.
+- Durable consumer: `impress|tasks:reports:daily`.
+
+There is one schedule per subject and one shared consumer per task. Multiple
+instances consume from that same durable, so a scheduled occurrence normally
+runs on one instance. A second instance does not create an independent timer.
+Unchanged schedules are reused on restart. A changed declaration replaces the
+schedule on the same subject. Applications sharing `TASKS` must use different
+prefixes; task names and prefixes should use letters, digits, `_`, and `-`,
+with directories represented by `:` in NATS names.
+Applications using different task streams have independent subject namespaces
+and may reuse the same prefix and task paths.
+
+Earlier experimental task streams capturing `tasks.>` are not converted
+automatically. Migrate their schedules, pending jobs, and consumers to the
+stream-specific subjects before deploying this layout; a broad `tasks.>`
+stream would still prevent creation of another task stream.
+
+When deploying different task definitions, designate one version to manage
+schedules (`active: true`). Multiple managers with different declarations can
+overwrite each other's schedules or remove tasks absent from their version.
+
+## Task options
+
+| Field         | Meaning                                                                   | Default                                              |
+| ------------- | ------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `cron`        | Five- or six-field cron expression                                        | Required                                             |
+| `tz`          | IANA time zone                                                            | `UTC`                                                |
+| `data`        | JSON data passed to `method`                                              | `{}`                                                 |
+| `maxMessages` | Native `consume({ max_messages })` receive buffer                         | `5`                                                  |
+| `retryLimit`  | Redeliveries after failure or missing acknowledgment                      | `2`                                                  |
+| `retryDelay`  | Delay after failure, in milliseconds                                      | `0`                                                  |
+| `timeout`     | Deadline including worker dispatch, method and callbacks, in milliseconds | Positive `server.workers.timeout`, otherwise `30000` |
+
+`maxMessages` is not a concurrency limit. Received jobs are dispatched without
+awaiting the previous job. Separate occurrences of a task can overlap.
+Timeouts do not forcibly stop a method already running in a worker.
+
+`method(data, job)` runs in the regular application worker pool. Successful
+execution calls `onCompleted(result, job)`; method errors call
+`onFailed(reason, job)` with an error message string. Callback errors are logged
+and do not change the method's result. NATS is acknowledged after the worker
+returns; a dispatch failure or execution deadline causes a negative
+acknowledgment. The receive loop starts only after application workers are ready.
+
+`job` contains `id`, `name`, `data`, `createdAt`, and `retryCount`. Its ID combines
+the stream and message sequence: it changes for each occurrence and remains
+the same on redelivery while the stream exists. `retryCount` starts at zero.
+This replaces the previous pg-boss job metadata.
+
+## Storage and lifecycle
+
+Consumers filter only execution subjects. A successful acknowledgment removes
+that job from the work-queue stream, leaving its schedule intact. Consumers
+use `deliver_policy: 'all'` so pending jobs survive application restarts.
+Jobs that exhaust their delivery attempts remain stored for investigation;
+there is no automatic dead-letter routing or cleanup of failed jobs.
+
+Do not apply a global age or count limit that can evict schedule messages:
+removing a schedule message stops that schedule. Deleting a task file removes
+its schedule and stops its local consumer, but preserves pending jobs and the
+server-side durable. Stopping an application stops consumption without deleting
+schedules; NATS continues producing scheduled jobs while applications are down.
+
+Delivery is at least once. A completed task can be delivered again if its
+acknowledgment is lost, or if execution exceeds its deadline. Methods and
+callbacks that cause external effects should tolerate retries.
+
+## Migrating from pg-boss
+
+`cron`, `tz`, `data`, `method`, `onCompleted`, and `onFailed` retain their syntax.
+Remove `server.pgboss` and `server.scheduler.notify`. PostgreSQL is no longer
+used for task scheduling or delivery. The separate BullMQ subsystem under
+`application/mq` is unchanged.
+
+pg-boss-specific options such as priority, singleton keys, queue policies,
+groups, polling, expiration, and local concurrency are no longer supported.
+`retryDelay` now uses milliseconds, matching event subscriber settings.
+
+Existing pg-boss jobs are not migrated, and its database tables are not removed.
+Stop the previous task workers before enabling NATS schedules to avoid having
+both schedulers execute the same cron task. Upgrade all NATS nodes to a version
+supporting recurring schedules before enabling this implementation.
+
+References: [NATS schedule API](https://github.com/nats-io/nats.js/blob/v3.4.0/jetstream/README.md#jetstream-message-schedules),
+[scheduler design and retention](https://github.com/nats-io/nats-architecture-and-design/blob/main/adr/ADR-51.md).

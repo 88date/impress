@@ -92,6 +92,8 @@ const createConnection = () => {
       }
     },
     async flush() {},
+    isClosed: () => false,
+    async close() {},
     async drain() {},
     async *status() {},
   };
@@ -679,17 +681,111 @@ test('lib/nats - should not retry invalid discovery responses', async () => {
 });
 
 test('lib/nats - should drain connection on close', async () => {
-  let drained = false;
+  const gate = Promise.withResolvers();
+  let drains = 0;
   const nats = new Nats({});
   nats.connection = {
-    drain: async () => {
-      drained = true;
+    isClosed: () => false,
+    drain: () => {
+      drains++;
+      return gate.promise;
     },
   };
-  await nats.close();
-  assert.strictEqual(drained, true);
+  const closing = nats.close();
+  assert.strictEqual(nats.close(), closing);
+  assert.strictEqual(drains, 1);
+  assert.notStrictEqual(nats.connection, null);
+  gate.resolve();
+  await closing;
   assert.strictEqual(nats.connection, null);
   assert.strictEqual(nats.discoveryCatalogSubscription, null);
+});
+
+test('lib/nats - should force close after the drain deadline', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const application = createApplication('worker');
+  application.config.server.timeouts.stop = 50;
+  const errors = [];
+  application.console.error = (...args) => errors.push(args);
+  const nats = new Nats(application);
+  const connection = createConnection();
+  nats.connection = connection;
+  connection.drain = () => new Promise(() => {});
+  let closed = false;
+  connection.close = async () => {
+    closed = true;
+  };
+
+  const closing = nats.close();
+  t.mock.timers.tick(49);
+  assert.strictEqual(closed, false);
+  t.mock.timers.tick(1);
+  await closing;
+
+  assert.strictEqual(closed, true);
+  assert.strictEqual(nats.connection, null);
+  assert.strictEqual(errors.length, 1);
+  assert.match(errors[0][1].message, /Timeout of 50ms/);
+});
+
+test('lib/nats - should force close after a drain failure', async () => {
+  const application = createApplication('worker');
+  const errors = [];
+  application.console.error = (...args) => errors.push(args);
+  const nats = new Nats(application);
+  const connection = createConnection();
+  const failure = new Error('Connection lost');
+  connection.drain = async () => {
+    throw failure;
+  };
+  let closed = false;
+  connection.close = async () => {
+    closed = true;
+  };
+  nats.connection = connection;
+  nats.serviceSubscriptions.set('example', {});
+  nats.jetstream = {};
+
+  await nats.close();
+
+  assert.strictEqual(closed, true);
+  assert.strictEqual(nats.connection, null);
+  assert.strictEqual(nats.jetstream, null);
+  assert.strictEqual(nats.serviceSubscriptions.size, 0);
+  assert.deepStrictEqual(errors, [['Can not drain NATS connection', failure]]);
+});
+
+test('lib/nats - should clear state when forced close fails', async () => {
+  const nats = new Nats(createApplication('worker'));
+  const connection = createConnection();
+  connection.drain = async () => {
+    throw new Error('Drain failed');
+  };
+  connection.close = async () => {
+    throw new Error('Close failed');
+  };
+  nats.connection = connection;
+  nats.jetstreamManager = {};
+  nats.discoverySubscriptions.set('example', {});
+
+  await assert.rejects(nats.close(), /Close failed/);
+
+  assert.strictEqual(nats.connection, null);
+  assert.strictEqual(nats.jetstreamManager, null);
+  assert.strictEqual(nats.discoverySubscriptions.size, 0);
+});
+
+test('lib/nats - should skip draining closed connections', async () => {
+  const nats = new Nats(createApplication('worker'));
+  nats.connection = {
+    isClosed: () => true,
+    drain: () => assert.fail('A closed connection cannot drain'),
+    close: () => assert.fail('Connection is already closed'),
+  };
+
+  await nats.close();
+
+  assert.strictEqual(nats.connection, null);
 });
 
 test('lib/nats - should preserve roles after reconnect', async () => {

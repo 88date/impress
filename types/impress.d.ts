@@ -39,7 +39,6 @@ import * as _http2 from 'node:http2';
 import * as _dgram from 'node:dgram';
 
 import * as _ws from 'ws';
-import * as _pgboss from 'pg-boss';
 
 import * as _config from 'metaconfiguration';
 import * as _metautil from 'metautil';
@@ -49,37 +48,6 @@ import * as _metalog from 'metalog';
 import * as _metawatch from 'metawatch';
 import * as _metaschema from 'metaschema';
 import * as _metaconfiguration from 'metaconfiguration';
-
-type TaskQueueOptions = Omit<_pgboss.UpdateQueueOptions, 'notify'> &
-  Pick<_pgboss.Queue, 'policy' | 'partition'>;
-
-type TaskScheduleOptions = Pick<_pgboss.ScheduleOptions, 'tz'> & {
-  cron: string;
-};
-
-type TaskJobOptions = Pick<
-  _pgboss.SendOptions,
-  | 'priority'
-  | 'singletonKey'
-  | 'singletonSeconds'
-  | 'singletonNextSlot'
-  | 'group'
->;
-
-type TaskWorkerOptions = Pick<
-  _pgboss.WorkOptions,
-  | 'pollingIntervalSeconds'
-  | 'notifyPollingIntervalSeconds'
-  | 'burstWhenReadyExceeds'
-  | 'burstWhenBatchFull'
-  | 'orderByCreatedOn'
-  | 'minPriority'
-  | 'maxPriority'
-  | 'localConcurrency'
-  | 'localGroupConcurrency'
-  | 'groupConcurrency'
-  | 'heartbeatRefreshSeconds'
->;
 
 declare global {
   interface EventMetadata {
@@ -134,27 +102,33 @@ declare global {
     ): Promise<string>;
   }
 
-  type TaskDeclaration<
-    Data extends object = Record<string, unknown>,
-    Result = unknown,
-  > = TaskQueueOptions &
-    TaskJobOptions &
-    TaskWorkerOptions &
-    TaskScheduleOptions & {
-      data?: Data;
-      method: (
-        data: Data,
-        job: Omit<_pgboss.JobWithMetadata<Data>, 'signal'>,
-      ) => Result | Promise<Result>;
-      onCompleted?: (
-        result: Result,
-        job: Omit<_pgboss.JobWithMetadata<Data>, 'signal'>,
-      ) => void | Promise<void>;
-      onFailed?: (
-        reason: string,
-        job: Omit<_pgboss.JobWithMetadata<Data>, 'signal'>,
-      ) => void | Promise<void>;
-    };
+  interface TaskJob<Data = Record<string, unknown>> {
+    /** Stream and message sequence; unchanged on redelivery. */
+    id: string;
+    name: string;
+    data: Data;
+    createdAt: string;
+    retryCount: number;
+  }
+
+  type TaskDeclaration<Data = Record<string, unknown>, Result = unknown> = {
+    /** Five fields (minutes first), or six fields (seconds first). */
+    cron: string;
+    /** IANA time zone. Defaults to UTC. */
+    tz?: string;
+    data?: Data;
+    /** JetStream receive buffer size, not a handler limit. Defaults to 5. */
+    maxMessages?: number;
+    /** Redeliveries after failure or missing ACK. Defaults to 2. */
+    retryLimit?: number;
+    /** Delay after failure in milliseconds. Defaults to 0. */
+    retryDelay?: number;
+    /** Execution deadline in milliseconds, including callbacks. */
+    timeout?: number;
+    method: (data: Data, job: TaskJob<Data>) => Result | Promise<Result>;
+    onCompleted?: (result: Result, job: TaskJob<Data>) => void | Promise<void>;
+    onFailed?: (reason: string, job: TaskJob<Data>) => void | Promise<void>;
+  };
 
   const application: Application;
   const context: Context;
@@ -217,6 +191,5 @@ declare global {
 
   namespace npm {
     const ws: typeof _ws;
-    const pgboss: typeof _pgboss;
   }
 }
