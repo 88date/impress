@@ -27,13 +27,12 @@
     active: 'boolean',
     notify: '?boolean',
   },
-  pubsub: {
-    active: 'boolean',
-  },
+  events: 'boolean',
   nats: {
     enabled: 'boolean',
-    servers: '?string',
+    servers: { array: 'string', required: false },
     credentials: '?string',
+    jetstream: '?json',
     discovery: {
       maxWait: 'number',
     },

@@ -1,0 +1,402 @@
+'use strict';
+
+const { test } = require('node:test');
+const assert = require('node:assert');
+const { JetStreamSubscriptions } = require('../lib/events/transports.js');
+const { JetStreamConsumer } = require('../lib/events/consumer.js');
+
+const createTransport = (managesTopology = true, jetstream = {}) => {
+  const nats = {
+    connection: {},
+    isStopping: false,
+    application: { config: { server: { nats: { jetstream } } } },
+  };
+  return new JetStreamSubscriptions(nats, console, managesTopology);
+};
+
+const createContract = (options = {}) => ({
+  subscriberName: 'feed:1:message:created',
+  eventName: 'chat:1:message:created',
+  ...options,
+});
+
+const createRecord = () => ({
+  id: 'event-1',
+  name: 'chat:1:message:created',
+  createdAt: '2026-10-31T00:00:00.000Z',
+  payload: { messageId: 42 },
+});
+
+const createMessage = (record = createRecord()) => {
+  const calls = [];
+  return {
+    calls,
+    json: () => record,
+    ack: () => calls.push(['ack']),
+    nak: (delay) => calls.push(['nak', delay]),
+  };
+};
+
+const createConsumer = (dispatch, options = {}) => {
+  const errors = [];
+  const logger = { error: (...args) => errors.push(args) };
+  const binding = createTransport().createBinding(createContract(options));
+  const consumer = new JetStreamConsumer(null, binding, dispatch, logger);
+  return { consumer, errors };
+};
+
+test('JetStream - instances share readable durable names', () => {
+  const transport = createTransport();
+  const first = transport.createBinding(createContract());
+  const same = createTransport().createBinding(
+    createContract({ maxMessages: 10 }),
+  );
+  const other = transport.createBinding(
+    createContract({ subscriberName: 'audit:1:message:created' }),
+  );
+  const moved = transport.createBinding(
+    createContract({ eventName: 'chat:1:message:updated' }),
+  );
+  const prefixed = createTransport(true, { consumerPrefix: 'backend' });
+  const separate = prefixed.createBinding(createContract());
+  assert.strictEqual(
+    first.consumerName,
+    'impress|feed:1:message:created|events:chat:1:message:created',
+  );
+  assert.strictEqual(first.options.durable_name, first.consumerName);
+  assert.strictEqual(first.consumerName, same.consumerName);
+  assert.notStrictEqual(first.consumerName, other.consumerName);
+  assert.notStrictEqual(first.consumerName, moved.consumerName);
+  assert.notStrictEqual(first.consumerName, separate.consumerName);
+  assert.strictEqual(first.eventSubject, 'events.chat.1.message.created');
+});
+
+test('JetStream - only owner creates missing consumers', async () => {
+  const owner = createTransport();
+  const passive = createTransport(false);
+  const binding = owner.createBinding(createContract());
+  const calls = [];
+  const manager = {
+    consumers: {
+      info: async () => {
+        throw Object.assign(new Error('Consumer not found'), { code: 10014 });
+      },
+      add: async (...args) => calls.push(args),
+    },
+  };
+  assert.strictEqual(await passive.ensureConsumer(manager, binding), false);
+  assert.deepStrictEqual(calls, []);
+  assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
+  assert.deepStrictEqual(calls, [[binding.stream, binding.options]]);
+});
+
+test('JetStream - updates retry policy without deleting backlog', async () => {
+  const owner = createTransport();
+  const passive = createTransport(false);
+  const binding = owner.createBinding(createContract({ retryLimit: 5 }));
+  const calls = [];
+  const manager = {
+    consumers: {
+      info: async () => ({ config: { ...binding.options, max_deliver: 3 } }),
+      update: async (...args) => calls.push(args),
+    },
+  };
+  assert.strictEqual(await passive.ensureConsumer(manager, binding), false);
+  assert.deepStrictEqual(calls, []);
+  assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
+  assert.deepStrictEqual(calls, [
+    [binding.stream, binding.consumerName, { max_deliver: 6 }],
+  ]);
+});
+
+test('JetStream - rejects a conflicting durable configuration', async () => {
+  const transport = createTransport();
+  const binding = transport.createBinding(createContract());
+  const manager = {
+    consumers: {
+      info: async () => ({
+        config: { ...binding.options, filter_subject: 'events.>' },
+      }),
+    },
+  };
+  await assert.rejects(
+    transport.ensureConsumer(manager, binding),
+    /Conflicting JetStream consumer/,
+  );
+});
+
+test('JetStream - propagate lookup permission errors', async () => {
+  const transport = createTransport();
+  const binding = transport.createBinding(createContract());
+  const failure = new Error('Permission denied');
+  const manager = {
+    consumers: {
+      info: async () => {
+        throw failure;
+      },
+      add: () => assert.fail('Unexpected consumer creation'),
+    },
+  };
+  await assert.rejects(
+    transport.ensureConsumer(manager, binding),
+    (error) => error === failure,
+  );
+});
+
+test('JetStream - rejects changed initial delivery options', async () => {
+  const transport = createTransport();
+  const cases = [
+    { deliverPolicy: 'new' },
+    { deliverPolicy: 'by_start_sequence', startSequence: 100 },
+    { deliverPolicy: 'by_start_time', startTime: '2026-10-31T00:00:00Z' },
+  ];
+  for (const options of cases) {
+    const original = transport.createBinding(createContract(options));
+    const changed = transport.createBinding(
+      createContract({
+        ...options,
+        deliverPolicy:
+          options.deliverPolicy === 'new' ? 'all' : options.deliverPolicy,
+        startSequence: 200,
+        startTime: '2026-11-01T00:00:00Z',
+      }),
+    );
+    const manager = {
+      consumers: {
+        info: async () => ({ config: original.options }),
+        add: () => assert.fail('Unexpected consumer creation'),
+        update: () => assert.fail('Unexpected consumer update'),
+        delete: () => assert.fail('Unexpected consumer deletion'),
+      },
+    };
+    await assert.rejects(
+      transport.ensureConsumer(manager, changed),
+      /Conflicting JetStream consumer/,
+    );
+  }
+});
+
+test('JetStream - accepts equivalent start timestamp formats', async () => {
+  const transport = createTransport();
+  const binding = transport.createBinding(
+    createContract({
+      deliverPolicy: 'by_start_time',
+      startTime: '2026-10-31T03:00:00.000+03:00',
+    }),
+  );
+  const manager = {
+    consumers: {
+      info: async () => ({
+        config: { ...binding.options, opt_start_time: '2026-10-31T00:00:00Z' },
+      }),
+      update: () => assert.fail('Unexpected consumer update'),
+    },
+  };
+  assert.strictEqual(await transport.ensureConsumer(manager, binding), true);
+});
+
+test('JetStream - ACK only after handler completion', async () => {
+  const finished = Promise.withResolvers();
+  const entered = Promise.withResolvers();
+  const message = createMessage();
+  const { consumer } = createConsumer(async (record, { signal }) => {
+    assert.deepStrictEqual(record, createRecord());
+    assert.strictEqual(signal.aborted, false);
+    entered.resolve();
+    await finished.promise;
+  });
+  const handling = consumer.handle(message);
+  await entered.promise;
+  assert.deepStrictEqual(message.calls, []);
+  finished.resolve();
+  await handling;
+  assert.deepStrictEqual(message.calls, [['ack']]);
+});
+
+test('JetStream - NAK with configured delay after failure', async () => {
+  const failure = new Error('Handler failed');
+  const { consumer, errors } = createConsumer(
+    async () => {
+      throw failure;
+    },
+    { retryDelay: 500 },
+  );
+  const message = createMessage();
+  await consumer.handle(message);
+  assert.deepStrictEqual(message.calls, [['nak', 500]]);
+  assert.strictEqual(errors[0][1], failure);
+});
+
+test('JetStream - times out and signals cancellation', async () => {
+  let signal;
+  const { consumer } = createConsumer(
+    (record, context) => {
+      signal = context.signal;
+      return new Promise(() => {});
+    },
+    { timeout: 1, retryDelay: 100 },
+  );
+  const message = createMessage();
+  await consumer.handle(message);
+  assert.strictEqual(signal.aborted, true);
+  assert.deepStrictEqual(message.calls, [['nak', 100]]);
+});
+
+test('JetStream - one reader starts handlers without waiting', async () => {
+  const entered = Promise.withResolvers();
+  const finished = Promise.withResolvers();
+  const closed = Promise.withResolvers();
+  let handlers = 0;
+  const { consumer } = createConsumer(
+    async () => {
+      if (++handlers === 3) entered.resolve();
+      await finished.promise;
+    },
+    { maxMessages: 2 },
+  );
+  const messages = [createMessage(), createMessage(), createMessage()];
+  const calls = [];
+  consumer.consumer = {
+    consume: async (options) => {
+      calls.push(options);
+      return {
+        async *[Symbol.asyncIterator]() {
+          for (const message of messages) yield message;
+          await closed.promise;
+        },
+        stop: () => closed.resolve(),
+        close: async () => closed.resolve(),
+      };
+    },
+  };
+  consumer.start();
+  await entered.promise;
+  let stopped = false;
+  const stopping = consumer.stop().then(() => {
+    stopped = true;
+  });
+  await Promise.resolve();
+  assert.strictEqual(stopped, false);
+  finished.resolve();
+  await stopping;
+  assert.deepStrictEqual(calls, [{ max_messages: 2 }]);
+  assert.strictEqual(consumer.pending.size, 0);
+  for (const message of messages) {
+    assert.deepStrictEqual(message.calls, [['ack']]);
+  }
+});
+
+test('JetStream - stop while a reader is opening', async () => {
+  const opening = Promise.withResolvers();
+  const closed = Promise.withResolvers();
+  let stopped = false;
+  const { consumer } = createConsumer(() => assert.fail('Stopped consumer'));
+  const message = createMessage();
+  consumer.consumer = { consume: () => opening.promise };
+  consumer.start();
+  const stopping = consumer.stop();
+  opening.resolve({
+    async *[Symbol.asyncIterator]() {
+      try {
+        yield message;
+      } finally {
+        closed.resolve();
+      }
+    },
+    stop: () => {
+      stopped = true;
+    },
+    close: () => closed.promise,
+  });
+  await stopping;
+  assert.strictEqual(stopped, true);
+  assert.deepStrictEqual(message.calls, [['nak', undefined]]);
+});
+
+test('JetStream - closes an empty reader opened after stop', async () => {
+  const opening = Promise.withResolvers();
+  const stopped = Promise.withResolvers();
+  const closed = Promise.withResolvers();
+  const { consumer } = createConsumer(() => assert.fail('Stopped consumer'));
+  consumer.consumer = { consume: () => opening.promise };
+  consumer.start();
+  const stopping = consumer.stop();
+  opening.resolve({
+    async *[Symbol.asyncIterator]() {
+      try {
+        await stopped.promise;
+        yield* [];
+      } finally {
+        closed.resolve();
+      }
+    },
+    stop: () => stopped.resolve(),
+    close: () => closed.promise,
+  });
+  await stopping;
+  assert.strictEqual(consumer.messages, null);
+});
+
+test('JetStream - drain after a read failure waits for handlers', async () => {
+  const entered = Promise.withResolvers();
+  const finished = Promise.withResolvers();
+  const failed = Promise.withResolvers();
+  const failure = new Error('Reader failed');
+  const { consumer } = createConsumer(async () => {
+    entered.resolve();
+    await finished.promise;
+  });
+  const message = createMessage();
+  let reads = 0;
+  consumer.logger = { error: (...args) => failed.resolve(args) };
+  consumer.consumer = {
+    consume: async () => {
+      reads++;
+      return {
+        async *[Symbol.asyncIterator]() {
+          yield message;
+          throw failure;
+        },
+        stop: () => {},
+        close: async () => {},
+      };
+    },
+  };
+  consumer.start();
+  await entered.promise;
+  const errors = await failed.promise;
+  assert.strictEqual(errors[1], failure);
+  await consumer.consuming;
+  assert.strictEqual(reads, 1);
+  assert.strictEqual(consumer.running, false);
+  assert.strictEqual(consumer.messages, null);
+  assert.strictEqual(consumer.pending.size, 1);
+  let stopped = false;
+  const stopping = consumer.stop().then(() => {
+    stopped = true;
+  });
+  await Promise.resolve();
+  assert.strictEqual(stopped, false);
+  finished.resolve();
+  await stopping;
+  assert.deepStrictEqual(message.calls, [['ack']]);
+});
+
+test('JetStream - opening failure stops without retrying', async () => {
+  const failure = new Error('Cannot open consumer');
+  const { consumer, errors } = createConsumer(() => {});
+  let reads = 0;
+  consumer.consumer = {
+    consume: async () => {
+      reads++;
+      throw failure;
+    },
+  };
+  consumer.start();
+  await consumer.consuming;
+  assert.strictEqual(reads, 1);
+  assert.strictEqual(consumer.running, false);
+  assert.strictEqual(consumer.messages, null);
+  assert.strictEqual(errors[0][1], failure);
+  await consumer.stop();
+});

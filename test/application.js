@@ -142,7 +142,7 @@ test('lib/application - should resolve latest API methods', () => {
 test('lib/application - documentation includes event catalogs', async (t) => {
   const remote = {
     name: 'chat:1:created',
-    subject: 'chat.1.created',
+    subject: 'events.chat.1.created',
     caption: 'Remote event',
     description: '',
     examples: null,
@@ -150,12 +150,12 @@ test('lib/application - documentation includes event catalogs', async (t) => {
   const local = {
     ...remote,
     caption: 'Local event',
-    transports: ['local', 'nats'],
+    transports: ['nats'],
   };
   const another = {
     ...remote,
     name: 'profile:1:updated',
-    subject: 'profile.1.updated',
+    subject: 'events.profile.1.updated',
   };
   application.nats = {
     getCatalog: async () => new Map(),
@@ -165,10 +165,7 @@ test('lib/application - documentation includes event catalogs', async (t) => {
     ]),
   };
   application.subscriptions = {
-    describeEvents: ({ natsOnly }) => {
-      assert.strictEqual(natsOnly, false);
-      return [local];
-    },
+    describeEvents: () => [local],
   };
   t.after(() => {
     application.nats = null;

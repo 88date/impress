@@ -1,3 +1,4 @@
+import type { DeliverPolicy } from '@nats-io/jetstream';
 import {
   LogConfig,
   ScaleConfig,
@@ -92,27 +93,40 @@ declare global {
     caption?: string;
     description?: string;
     examples?: Data[];
-    transports: Array<'local' | 'nats'>;
   };
 
   type SubscriberDeclaration<Data = Record<string, unknown>> = {
     event: string;
-    /** Concurrent handlers per pg-boss instance. Defaults to 1. */
-    concurrency?: number;
-    /** Number of retries after a failed handler. */
+    deliverPolicy?: DeliverPolicy;
+    startSequence?: number;
+    startTime?: string;
+    /** JetStream receive buffer size, not a handler limit. Defaults to 5. */
+    maxMessages?: number;
+    /** Redeliveries after failure or missing ACK. Defaults to 2. */
     retryLimit?: number;
-    /** Delay between retries in milliseconds. */
+    /** Delay after a failed handler in milliseconds. Defaults to 0. */
     retryDelay?: number;
-    /** Maximum handler execution time in milliseconds. */
+    /** Handler timeout in milliseconds. Defaults to 30000. */
     timeout?: number;
     method: (data: Data, event: EventMetadata) => unknown | Promise<unknown>;
   };
 
+  interface EventDatabase {
+    query(text: string, values: unknown[]): PromiseLike<unknown>;
+  }
+
+  interface EventConfiguration {
+    database: EventDatabase;
+    schema?: string;
+    table?: string;
+  }
+
   interface EventEmitOptions {
-    transaction?: unknown;
+    transaction?: EventDatabase;
   }
 
   interface Events {
+    configure(options: EventConfiguration): void;
     emit(
       name: string,
       data: unknown,

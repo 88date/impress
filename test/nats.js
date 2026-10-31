@@ -1141,20 +1141,12 @@ test('lib/nats - should merge event metadata during rollout', async () => {
   assert.deepStrictEqual(events, variants[1]);
 });
 
-test('lib/nats - should publish an event on the supplied subject', () => {
+test('lib/nats - JetStream requires an available connection', async () => {
   const nats = new Nats(createApplication('server'));
-  const connection = createConnection();
-  nats.connection = connection;
-  const payload = { id: 'event-1', data: { value: 42 } };
-
-  nats.publishEvent('chat.1.message.created', payload);
-
-  assert.deepStrictEqual(connection.published, [
-    {
-      subject: 'chat.1.message.created',
-      payload: JSON.stringify(payload),
-    },
-  ]);
+  await assert.rejects(nats.getJetStream(), /not available/);
+  nats.connection = createConnection();
+  nats.isStopping = true;
+  await assert.rejects(nats.getJetStream(), /not available/);
 });
 
 test('lib/nats - should defer RPC subscriptions until connected', async () => {

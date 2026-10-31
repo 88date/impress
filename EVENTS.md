@@ -1,9 +1,17 @@
 # Application events
 
-Event declarations describe what an application publishes. Subscriber
-declarations describe how an application handles an event.
+Events use PostgreSQL outbox → Debezium → NATS JetStream → subscribers.
+Impress writes outbox records and consumes JetStream messages. The application
+owns its database migrations, Debezium deployment and JetStream stream.
+pg-boss is used only for tasks and cron.
 
 ## Declaring and publishing
+
+Event names follow `service:version:entity:action`, for example
+`example:1:message:created`. Use letters, digits, `_` and `-` inside name
+parts, with a numeric version and `:` as the separator. Subscriber names
+follow the same convention. Correct names are the developer's responsibility;
+Impress does not validate the name format or escape special characters.
 
 `application/events/chat.1/messageCreated.js`:
 
@@ -11,29 +19,176 @@ declarations describe how an application handles an event.
 ({
   caption: 'Message created',
   examples: [{ messageId: 42 }],
-  transports: ['local', 'nats'],
 });
 ```
 
-The path becomes the event name `chat:1:message:created` and NATS subject
-`chat.1.message.created`. A directory without a version defaults to version 1.
-Use the same canonical event name in subscribers and publishers:
+The path becomes the event name `chat:1:message:created` and subject
+`events.chat.1.message.created`. A directory without a version defaults to
+version 1. All events use NATS JetStream; declarations do not select a transport.
 
 ```js
 const id = await events.emit('chat:1:message:created', { messageId: 42 });
 ```
 
-The event envelope contains `id`, `name`, `createdAt`, and `data`.
-Subscribers receive `data` as the first argument and the envelope metadata as
-the second argument.
+Publication requires a declared event and an outbox configured through
+`events.configure()`. It always writes to the outbox and returns the generated
+ID after the INSERT succeeds. There is no direct NATS or pg-boss publication.
+The publisher does not need an active connection to either broker.
 
-`emit()` rejects unknown events, declarations without delivery transports,
-and publication when a required transport is unavailable. Local delivery
-requires a pg-boss client; NATS delivery requires a NATS connection.
-All declared transports are checked before sending, so a declaration with
-both `local` and `nats` cannot silently publish to just one of them.
-Availability is checked on each call, including after a transport restarts.
-This check does not guarantee subscriber processing.
+## PostgreSQL outbox
+
+Configure the outbox after initializing the application's database client.
+For example, in `application/db/pg/start.js`, after assigning `db.pg.query`:
+
+```js
+events.configure({
+  database: {
+    query: (text, values) => db.pg.query({ text, values }),
+  },
+  schema: 'public',
+  table: 'outbox',
+});
+```
+
+`database.query(text, values)` must return a promise or thenable that settles
+when the query finishes. Its result is not used. The application owns the
+client and its lifecycle. `schema` and `table` default to `public` and
+`outbox`; both are quoted SQL identifiers, preserving camelCase names.
+Query errors reject publication.
+
+The application creates the table through its own migrations. Impress does
+not create it at runtime. All columns are NOT NULL; `id` is the primary key.
+
+- `id` (uuid): generated event UUID.
+- `name` (text): event name, e.g. `chat:1:message:created`.
+- `subject` (text): subject, e.g. `events.chat.1.message.created`.
+- `createdAt` (timestamptz): event creation time.
+- `payload` (jsonb): user data without another metadata envelope.
+
+Payloads use `JSON.stringify` serialization: objects, arrays, strings,
+numbers, booleans and `null` are supported. JSON `null` is stored as a JSON
+value, not SQL NULL. Top-level `undefined`, BigInt and circular references
+reject publication. Normal JSON serialization rules apply to nested values.
+
+### Transactions
+
+Pass an adapter for an existing transaction to override the configured client:
+
+```js
+await events.emit('chat:1:message:created', data, { transaction });
+```
+
+The transaction must expose `query(text, values)` and execute the INSERT on
+the connection used for the business changes. Impress does not begin, commit
+or roll back transactions. With a supplied transaction, the returned ID does
+not mean that the transaction has committed.
+
+Without an explicit transaction, the configured adapter executes the INSERT,
+normally using autocommit. An adapter backed by `AsyncLocalStorage`, such as
+the application's `db.pg`, can select the current transaction implicitly.
+Prisma transactions need an adapter backed by their own transaction client.
+
+## Debezium message contract
+
+Configure the CDC pipeline to publish committed outbox inserts to the NATS
+subject stored in `subject`, using JetStream publication with a storage ACK.
+Only advance the CDC offset after that acknowledgement. Configure timestamp
+and JSON conversion so the message body has this shape:
+
+```json
+{
+  "id": "4e301daf-962c-4d62-aa47-38888c924870",
+  "name": "chat:1:message:created",
+  "subject": "events.chat.1.message.created",
+  "createdAt": "2026-10-31T12:00:00.000Z",
+  "payload": { "messageId": 42 }
+}
+```
+
+`subject` in the body is optional; the other fields are required. `createdAt`
+must be a date string and `payload` must be the decoded JSON value. The
+subscriber does not unwrap Debezium's raw `before`/`after` envelope or parse a
+stringified JSON payload. Forwarding only the payload loses required metadata.
+Delete events and tombstones from outbox cleanup must not be forwarded.
+
+Debezium connectors, transformations, stream provisioning and outbox cleanup
+are application infrastructure and are not configured by Impress.
+
+## JetStream configuration
+
+Create a stream named `EVENTS` capturing `events.>` before starting subscribers.
+Use limits retention so independent subscribers can read the same events and
+durable consumers can resume after downtime. Set storage, replication and
+retention limits in the infrastructure configuration.
+
+The application can select another existing stream and a consumer namespace:
+
+```js
+({
+  nats: {
+    enabled: true,
+    servers: ['nats://127.0.0.1:4222'],
+    credentials: 'application.creds',
+    discovery: { maxWait: 1000 },
+    jetstream: {
+      stream: 'EVENTS',
+      consumerPrefix: 'impress',
+    },
+  },
+  events: true,
+});
+```
+
+These fields belong to `server` configuration. Set `server.events: true` on
+instances that manage subscriber consumers. Every server worker in these
+instances can create consumers and update their delivery options, independently
+of its discovery role. Replicas use the same consumer names and delivery
+options. Workers with `server.events: false` only attach to matching existing
+consumers. If a consumer is missing or awaits an options update, they retry
+once per second in the background.
+
+`nats.servers` is an array of addresses, including when there is only one
+server. For a comma-separated environment variable, configure it as
+`process.env.NATS_SERVERS?.split(',').map((server) => server.trim())`.
+
+The `server.events` flag controls consumer creation and updates. With `false`,
+server workers still consume using existing consumers. Outbox publication and
+catalog discovery continue independently of this flag.
+
+NATS permissions must allow reading consumer information, pulling messages
+and acknowledging them. Managing instances also need permission to create
+and update consumers. Stream creation is not performed by Impress.
+
+Only server workers consume events. Regular workers and balancers can publish
+through the outbox. NATS remains the transport for RPC and event discovery.
+
+The subscriber's `deliverPolicy` selects where a new consumer starts reading:
+
+| Mode | Starting point |
+| --- | --- |
+| `all` | All retained matching messages. |
+| `new` | Messages published after the consumer is created; the default. |
+| `last` | The last retained matching message. |
+| `last_per_subject` | The last retained message for each matching subject. |
+| `by_start_sequence` | Stream sequence `startSequence`, inclusive. |
+| `by_start_time` | Stream timestamp `startTime`, inclusive. |
+
+All modes continue with subsequent messages. `startSequence` is a stream
+sequence number, not an outbox event ID. `startTime` is an RFC 3339 string,
+for example `'2026-10-31T00:00:00Z'`, referring to when NATS stored the message,
+not the outbox `createdAt`. These options are configured only in individual
+subscriber declarations.
+Only the start option required by the selected policy is sent to NATS.
+Each subscriber currently filters one exact subject, so `last_per_subject`
+has the same effect as `last`.
+
+The policy and starting point apply only when creating a consumer. Restarts
+resume its saved position, including with `new`: retained events published
+during downtime are still delivered. Initial delivery options cannot be
+changed on an existing consumer. Impress reports a configuration conflict
+instead of deleting or resetting it. To choose a new starting point, create
+a separately named subscriber or explicitly retire the existing consumer
+in the infrastructure before recreating it.
 
 ## Subscribers
 
@@ -42,7 +197,8 @@ This check does not guarantee subscriber processing.
 ```js
 ({
   event: 'chat:1:message:created',
-  concurrency: 2,
+  deliverPolicy: 'new',
+  maxMessages: 5,
   retryLimit: 5,
   retryDelay: 1000,
   timeout: 30000,
@@ -52,133 +208,121 @@ This check does not guarantee subscriber processing.
 });
 ```
 
-The subscriber name is `feed:1:message:created`. Its pg-boss queue is
-`subscribers/feed/1/messageCreated`; its NATS queue group is
-`feed.1.message.created`. Copies of this subscriber share the same queue or
-queue group. Different subscriber names receive independent copies of an event.
+Here `deliverPolicy: 'new'` explicitly selects the mode for this subscriber.
+Without it, the subscriber uses `new`. The same declaration can include
+`startSequence` or `startTime` for the corresponding mode. For example, set
+`deliverPolicy: 'by_start_time'` and `startTime: '2026-10-31T00:00:00Z'`.
 
-The pg-boss queue name preserves the subscriber's file and directory names,
-without `.js`, and inserts the version after the top-level directory.
-For example, `application/subscribers/profile/handleCreateMessage.js` becomes
-`subscribers/profile/1/handleCreateMessage`.
+The subscriber name is `feed:1:message:created`. The durable consumer name
+joins `consumerPrefix`, `subscriberName` and `eventSubject` with `|`. Subject
+dots become colons in this name; the actual NATS subject is unchanged:
 
-- `local` delivers through pg-boss within the application, across its
-  workers and instances. It does not mean an in-process callback.
-- `nats` publishes to NATS. Server workers consume NATS events;
-  regular workers and balancers may publish but do not subscribe to them.
-- A subscriber uses pg-boss when the event is declared locally with
-  `local` delivery and pg-boss is enabled. Otherwise an event declared with
-  `nats`, or one published by another application,
-  uses NATS when available.
-
-`concurrency`, `retryLimit`, `retryDelay`, and `timeout` configure pg-boss
-consumers. Delays and timeouts in declarations are in milliseconds.
-These settings do not apply to Core NATS subscribers.
-
-## Configuration and ownership
-
-Connections are configured through `server.pgboss` and `server.nats`.
-Set `server.pubsub.active: true` on the instance responsible for managing
-subscriber queues. Its designated discovery worker creates and updates
-bindings and removes queues for deleted subscribers. Other workers consume
-without changing the shared topology.
-
-Before starting a local consumer, a non-managing worker checks that its queue
-exists. If the managing worker has not created it yet, the consumer waits in
-the background and checks again once per second. Application startup and
-other subscribers can proceed. Checks stop after the consumer starts, the
-subscriber is removed, or the application stops. If no managing instance is
-active, consumers of missing queues keep waiting.
-
-Changing a subscriber's event replaces its persisted pg-boss binding,
-including after an application restart. Moving a subscriber to NATS clears
-its previous local binding without deleting the queue.
-
-Startup fails if a declaration cannot be read, parsed, or validated.
-Queue cleanup runs only after declarations have loaded successfully.
-A failed file reload logs the error and retains the last working declaration.
-Deleting a subscriber on the managing instance removes its queue and jobs.
-
-## Transactions and delivery
-
-With pg-boss enabled, outgoing NATS events first enter the shared
-`events/nats/publish` outbox queue. A publisher forwards them to NATS.
-Without pg-boss, NATS events publish directly.
-
-When both `local` and `nats` are declared, local subscriber jobs and the
-outbox entry are written in one PostgreSQL transaction. If no transaction is
-supplied, `emit()` opens one and returns only after it commits. A failed write
-rolls back both directions. NATS forwarding happens after commit, outside
-this transaction.
-
-```js
-await events.emit('chat:1:message:created', data, { transaction });
+```text
+impress|feed:1:message:created|events:chat:1:message:created
 ```
 
-The transaction must use the same PostgreSQL database as pg-boss and expose
-`query(text, values)`, returning a result with `rows`. Both local delivery
-and outbox insertion use the supplied transaction. Direct NATS publication
-cannot participate in a database transaction.
+The parts are joined directly without encoding. `consumerPrefix` uses
+letters, digits, `_` or `-`; the default is `impress`. The `|` delimiter is
+reserved for joining parts and must not occur within them. Names following
+this convention keep the same durable names as before. No instance or worker
+ID enters the name. Copies of the same subscriber share work; different names
+receive independent copies.
+Applications that need independent copies for identical subscriber names must
+use different consumer prefixes. Replicas of one application use the same
+prefix and stream.
 
-With a supplied transaction, `emit()` neither commits nor rolls it back and
-does not open a nested transaction. The caller must commit after success or
-roll back on failure. Use this form to commit business changes and event jobs
-together; the automatic transaction covers only event publication.
+Subscribers receive `payload` as their first argument and
+`{ id, name, createdAt, signal }` as their second argument. They can consume
+events declared by another application without a local event declaration.
 
-Automatic transactions use the built-in pg-boss database connection. A custom
-`server.pgboss.db` adapter must implement `withTransaction(callback)`, passing
-a database with `executeSql(text, values)` to the callback and handling commit
-and rollback. Otherwise, pass an existing transaction to `emit()`.
+- `maxMessages`: JetStream receive buffer size, default 5.
+- `retryLimit`: redeliveries after failure or a missing ACK, default 2.
+- `retryDelay`: delay after a failed handler in milliseconds, default 0.
+- `timeout`: handler timeout in milliseconds, default 30000.
 
-Core NATS does not acknowledge handler completion or redeliver failed
-subscriber calls. The outbox covers publication to NATS, not processing by
-NATS subscribers. Local handlers should tolerate retries and use the
-event ID when deduplication is required.
+Each server worker opens one `consumer.consume()` iterator per subscriber,
+passing `maxMessages` as the SDK's `max_messages` option. Each received message
+starts its handler immediately, without waiting for previous handlers or a
+whole batch. `maxMessages` controls receiving; it does not limit active
+handlers. Impress does not impose a local concurrency limit.
+
+The SDK handles continued reading and its built-in recovery. Impress does not
+reopen the iterator in a retry loop. A terminal error opening or reading the
+iterator is logged and marks the local reader as stopped. Subscriber
+reconciliation or an application restart can start it again.
+
+Successful handling sends ACK. A JSON decoding error, handler failure or
+timeout sends NAK with `retryDelay`. If a worker disappears without
+acknowledging, JetStream redelivers after `timeout + 1000` milliseconds.
+`retryLimit + 1` bounds total delivery attempts. Exhausted messages remain
+subject to stream retention; Impress does not create a dead-letter queue or
+replay them automatically.
+
+Timeout aborts `event.signal` but cannot forcibly stop JavaScript or undo side
+effects. Handlers should honor cancellation where possible and be idempotent
+using `event.id`: CDC restarts, missing ACKs and timeouts can cause duplicates.
+Concurrent handlers and retries do not guarantee completion order.
+
+New consumers start according to their configured delivery policy. Normal
+restarts resume the existing durable position. Changing the subscriber's event
+selects a different durable consumer. Updating only its method keeps the
+existing consumer and position. Changes to retry limits and acknowledgment
+timeouts update the same consumer without resetting its position.
+Changing `maxMessages` restarts the local reader using the same durable
+consumer and position.
+
+Shutdown stops new pulls and waits for in-flight handlers to finish or time
+out. Removing a subscriber stops its local handler but does not delete the
+durable consumer or its pending messages. Retiring old consumers is an
+explicit infrastructure operation.
+
+Startup fails if declarations cannot be read, parsed or validated. A failed
+file reload logs the error and retains the last working declaration.
+
+## Migration
+
+Configure the outbox, application table, CDC pipeline and JetStream stream
+before switching publishers and subscribers. Remove `transports` from event
+declarations. The old direct Core NATS publication and pg-boss event delivery
+paths have been removed.
+
+Set `nats.servers` to an array of addresses. Wrap an existing single address
+in an array or split a comma-separated environment variable in the config.
+
+Replace subscriber `concurrency` with `maxMessages` to configure receive
+buffering. The former local handler limit is removed; `maxMessages` does not
+provide the same limit.
+
+Readable consumer names replace the previous hash-based names. Existing
+consumers and their positions are not renamed or removed automatically. A
+consumer with a new name uses its configured initial delivery policy.
+
+Old pg-boss event queues and their pending jobs are not migrated or deleted
+automatically. Drain or migrate them as a separate deployment step. pg-boss
+configuration and its dependency remain for `application/tasks` and cron.
 
 ## Runtime modules
 
-The event subsystem lives in `lib/events/`. The framework imports its classes
-through `lib/events/index.js`.
+The event subsystem lives in `lib/events/`:
 
-| File               | Responsibility                                                                         |
-| ------------------ | -------------------------------------------------------------------------------------- |
-| `index.js`         | Exports the subsystem's classes to the framework.                                      |
-| `publisher.js`     | Builds envelopes, publishes events, and forwards the outbox.                           |
-| `subscriptions.js` | Reconciles declarations and active handlers.                                           |
-| `declarations.js`  | Loads event and subscriber declarations, validates them, and derives names from paths. |
-| `transports.js`    | Implements the pg-boss and NATS subscription adapters.                                 |
+- `publisher.js` builds event metadata and writes the outbox.
+- `outbox.js` inserts records using the application's database adapter.
+- `declarations.js` loads and normalizes declarations.
+- `subscriptions.js` reconciles declarations and active handlers.
+- `transports.js` configures JetStream durable consumers.
+- `consumer.js` pulls messages, dispatches handlers and acknowledges delivery.
 
-The connection modules `lib/pgboss.js` and `lib/nats.js` also serve scheduled
-tasks and RPC, respectively. Catalogs and their shared `DiscoveryWorker`
-are grouped in `lib/catalog.js`.
+`lib/nats.js` owns the shared NATS connection and JetStream clients.
+`lib/pgboss.js` serves tasks. Catalogs and their shared `DiscoveryWorker` live
+in `lib/catalog.js`.
 
-The `events` field returned by `await application.getDocumentation()` contains
-local declarations and discovered remote event metadata. Local declarations
-take precedence when a name appears in both sources. NATS discovery uses
-cached snapshots.
+The `events` field from `await application.getDocumentation()` contains local
+declarations and discovered remote metadata. Local declarations take
+precedence. `origin: 'local' | 'remote'` describes the declaration's source;
+all events use the `nats` transport.
 
-Event documentation includes `origin: 'local' | 'remote'` relative to the
-application serving the documentation and the declared `transports`.
-A local declaration published through NATS remains local. Remote entries
-come from applications that respond to NATS discovery and advertise the
-`nats` transport; their local-only events are not visible. Service method
-documentation also includes `origin`, based on where the method executes.
-
-## Migration and verification
-
-Use `nats` instead of `external` in event `transports`.
-The old `external` transport name is no longer accepted.
-
-Use `method` instead of `handler` in subscriber declarations.
-Both local and NATS delivery invoke `method(data, event)`.
-
-Use `server.pgboss` instead of the misspelled `server.bgboss`.
-The old `service.<name>.emit/on` API and `EventBroker` have been removed.
-Move publishers to `events.emit` and listeners to subscriber declarations.
-RPC action calls remain `service.<name>.<action>(args)`.
-
-The optional integration tests use:
-
-- `NATS_TEST_SERVERS` and `NATS_TEST_CREDENTIALS` for NATS.
-- `PGBOSS_TEST_CONNECTION_STRING` for PostgreSQL. The test creates and removes
-  a unique schema, leaving other schemas unchanged.
+Optional integration tests use `NATS_TEST_SERVERS` and
+`NATS_TEST_CREDENTIALS` for NATS with JetStream. They create and remove a
+unique test stream. The event test simulates CDC publication; it does not
+start or verify Debezium. `OUTBOX_TEST_CONNECTION_STRING` enables PostgreSQL
+autocommit, commit and rollback tests in a unique temporary schema.

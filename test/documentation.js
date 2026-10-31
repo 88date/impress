@@ -212,7 +212,7 @@ test('lib/documentation - should describe application interfaces', () => {
 test('lib/documentation - event origin is relative to the application', () => {
   const local = Object.freeze({
     name: 'chat:1:created',
-    transports: ['local', 'nats'],
+    transports: ['nats'],
     caption: 'Local declaration',
   });
   const sameName = { ...local, caption: 'Discovered declaration' };

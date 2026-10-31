@@ -45,7 +45,7 @@ export interface ServerConfig {
     timeout: number;
   };
   scheduler: SchedulerConfig;
-  pubsub: PubSubConfig;
+  events: boolean;
   nats: NatsConfig;
   pgboss: PgbossConfig;
   centrifugo: {
@@ -64,8 +64,12 @@ export interface CacheConfig {
 
 export interface NatsConfig {
   enabled: boolean;
-  servers?: string;
+  servers?: Array<string>;
   credentials?: string;
+  jetstream?: {
+    stream?: string;
+    consumerPrefix?: string;
+  };
   discovery: {
     maxWait: number;
   };
@@ -74,13 +78,7 @@ export interface NatsConfig {
 export interface SchedulerConfig {
   enabled: boolean;
   active: boolean;
-  /** Enable LISTEN/NOTIFY for tasks; false uses polling. Defaults to false. */
   notify?: boolean;
-}
-
-export interface PubSubConfig {
-  /** Make this instance the pg-boss subscriber topology manager. */
-  active: boolean;
 }
 
 export type PgbossConfig = PgbossOptions & {

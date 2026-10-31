@@ -24,7 +24,7 @@ const {
 } = require('../lib/events/index.js');
 const application = require('../lib/application.js');
 
-const createConfig = (subscriptionsActive = false) => ({
+const createConfig = (manageEvents = false) => ({
   server: {
     host: '127.0.0.1',
     protocol: 'http',
@@ -40,9 +40,7 @@ const createConfig = (subscriptionsActive = false) => ({
       enabled: true,
       notify: true,
     },
-    pubsub: {
-      active: subscriptionsActive,
-    },
+    events: manageEvents,
     nats: {
       enabled: true,
       discovery: {
@@ -58,12 +56,12 @@ const createConfig = (subscriptionsActive = false) => ({
 
 const initialize = (
   kind = 'worker',
-  subscriptionsActive = false,
+  manageEvents = false,
   discoveryLoader = false,
 ) => {
   wt.workerData.discoveryLoader = discoveryLoader;
   application.kind = kind;
-  application.config = createConfig(subscriptionsActive);
+  application.config = createConfig(manageEvents);
   application.console = console;
   application.initializeMessaging();
 };
@@ -80,35 +78,72 @@ test('application events - initializes transports by worker kind', () => {
     assert.strictEqual(subscriptions instanceof SubscriptionManager, true);
     assert.strictEqual(events instanceof EventLoader, true);
     assert.strictEqual(subscribers instanceof SubscriberLoader, true);
-    assert.strictEqual(eventPublisher.pgboss, pgboss);
-    assert.strictEqual(eventPublisher.nats, nats);
-    assert.strictEqual(subscriptions.local.pgboss, pgboss);
     assert.strictEqual(
-      subscriptions.nats.nats,
+      subscriptions.transport.nats,
       kind === 'server' ? nats : null,
     );
-    assert.strictEqual(subscriptions.local.managesTopology, false);
+    assert.strictEqual(subscriptions.transport.managesTopology, false);
     assert.strictEqual(events.subscriptions, subscriptions);
     assert.strictEqual(subscribers.subscriptions, subscriptions);
-    assert.strictEqual(eventPublisher.notify, true);
+    assert.strictEqual(eventPublisher.outbox, null);
   }
 });
 
-test('application events - selects one active topology worker', () => {
+test('application events - consumer management ignores discovery', () => {
   const cases = [
-    [false, false, false],
-    [false, true, false],
-    [true, false, false],
-    [true, true, true],
+    ['server', false, false, false],
+    ['server', false, true, false],
+    ['server', true, false, true],
+    ['server', true, true, true],
+    ['worker', true, true, false],
+    ['balancer', true, true, false],
   ];
-  for (const [active, loader, expected] of cases) {
-    initialize('worker', active, loader);
+  for (const [kind, active, loader, expected] of cases) {
+    initialize(kind, active, loader);
     assert.strictEqual(
-      application.subscriptions.local.managesTopology,
+      application.subscriptions.transport.managesTopology,
       expected,
     );
   }
   wt.workerData.discoveryLoader = false;
+});
+
+test('application events - subscribers configure initial delivery', () => {
+  initialize('server');
+  const names = {
+    name: 'feed:1:message:created',
+    path: 'feed/1/messageCreated',
+  };
+  const declaration = {
+    event: 'chat:1:message:created',
+    method: async () => {},
+  };
+  const transport = application.subscriptions.transport;
+  const defaultBinding = transport.createBinding(
+    SubscriberLoader.compile(declaration, names),
+  );
+  assert.strictEqual(defaultBinding.options.deliver_policy, 'new');
+  assert.strictEqual(defaultBinding.options.opt_start_seq, undefined);
+  assert.strictEqual(defaultBinding.options.opt_start_time, undefined);
+  const cases = [
+    { deliverPolicy: 'all' },
+    { deliverPolicy: 'new' },
+    { deliverPolicy: 'last' },
+    { deliverPolicy: 'last_per_subject' },
+    { deliverPolicy: 'by_start_sequence', startSequence: 200 },
+    { deliverPolicy: 'by_start_time', startTime: '2026-10-31T00:00:00Z' },
+  ];
+  for (const options of cases) {
+    const contract = SubscriberLoader.compile(
+      { ...declaration, ...options },
+      names,
+    );
+    const binding = transport.createBinding(contract);
+    assert.strictEqual(binding.consumerName, defaultBinding.consumerName);
+    assert.strictEqual(binding.options.deliver_policy, options.deliverPolicy);
+    assert.strictEqual(binding.options.opt_start_seq, options.startSequence);
+    assert.strictEqual(binding.options.opt_start_time, options.startTime);
+  }
 });
 
 test('application events - forwards sandbox events.emit', async (t) => {
@@ -138,6 +173,29 @@ test('application events - forwards sandbox events.emit', async (t) => {
   assert.strictEqual(call.arguments[2].transaction, transaction);
 });
 
+test('application events - configures outbox through sandbox', async () => {
+  initialize();
+  application.createSandbox();
+  const calls = [];
+  application.sandbox.events.configure({
+    database: { query: async (...args) => calls.push(args) },
+    schema: 'appEvents',
+    table: 'eventOutbox',
+  });
+  application.eventPublisher.registerEvent({
+    eventName: 'chat:1:message:created',
+    eventSubject: 'events.chat.1.message.created',
+  });
+
+  const id = await application.sandbox.events.emit('chat:1:message:created', {
+    messageId: 42,
+  });
+
+  assert.strictEqual(calls.length, 1);
+  assert.ok(calls[0][0].startsWith('INSERT INTO "appEvents"."eventOutbox"'));
+  assert.strictEqual(calls[0][1][0], id);
+});
+
 test('application events - follows lifecycle order', async (t) => {
   initialize();
   application.mode = 'prod';
@@ -151,9 +209,6 @@ test('application events - follows lifecycle order', async (t) => {
   t.mock.method(application.nats, 'start', async () => {
     calls.push('nats.start');
   });
-  t.mock.method(application.eventPublisher, 'start', async () => {
-    calls.push('events.start');
-  });
   t.mock.method(application.subscriptions, 'start', async () => {
     calls.push('subscriptions.start');
   });
@@ -163,16 +218,12 @@ test('application events - follows lifecycle order', async (t) => {
   assert.deepStrictEqual(calls, [
     'pgboss.start',
     'nats.start',
-    'events.start',
     'subscriptions.start',
   ]);
 
   calls.length = 0;
   t.mock.method(application.subscriptions, 'stop', async () => {
     calls.push('subscriptions.stop');
-  });
-  t.mock.method(application.eventPublisher, 'stop', async () => {
-    calls.push('events.stop');
   });
   t.mock.method(application.nats, 'close', async () => {
     calls.push('nats.close');
@@ -196,22 +247,16 @@ test('application events - follows lifecycle order', async (t) => {
 
   assert.deepStrictEqual(calls, [
     'subscriptions.stop',
-    'events.stop',
     'nats.close',
     ['pgboss.stop', 5000],
   ]);
 });
 
-test('application events - load failure prevents queue cleanup', async (t) => {
+test('application events - load failure prevents startup', async (t) => {
   initialize();
   t.mock.method(application, 'initializeMessaging', () => {});
   t.mock.method(application, 'startWatch', () => {});
   t.mock.method(application.console, 'error', () => {});
-  const cleanup = t.mock.method(
-    application.subscriptions,
-    'removeStaleQueues',
-    async () => {},
-  );
   const starting = t.mock.method(application, 'start', async () => {});
   for (const name of [
     'static',
@@ -238,5 +283,4 @@ test('application events - load failure prevents queue cleanup', async (t) => {
     /initialize an Application/,
   );
   assert.strictEqual(starting.mock.callCount(), 0);
-  assert.strictEqual(cleanup.mock.callCount(), 0);
 });

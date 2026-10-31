@@ -36,11 +36,11 @@ test('schemas/config - should validate config schemas correctly', async () => {
   };
   assert.strictEqual(server.check(invalidNats).valid, false);
 
-  const invalidPubsub = {
+  const invalidEvents = {
     ...config.server,
-    pubsub: { active: 'true' },
+    events: 'true',
   };
-  assert.strictEqual(server.check(invalidPubsub).valid, false);
+  assert.strictEqual(server.check(invalidEvents).valid, false);
 
   const invalidPgboss = { ...config.server, pgboss: 'enabled' };
   assert.strictEqual(server.check(invalidPgboss).valid, false);

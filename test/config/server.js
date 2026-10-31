@@ -27,13 +27,15 @@
     active: false,
     notify: false,
   },
-  pubsub: {
-    active: false,
-  },
+  events: false,
   nats: {
     enabled: false,
-    servers: 'nats://127.0.0.1:4222',
+    servers: ['nats://127.0.0.1:4222'],
     credentials: 'test.creds',
+    jetstream: {
+      stream: 'EVENTS',
+      consumerPrefix: 'impress',
+    },
     discovery: {
       maxWait: 1000,
     },

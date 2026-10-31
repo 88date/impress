@@ -2,6 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
+const { randomBytes } = require('node:crypto');
 const { AsyncLocalStorage } = require('node:async_hooks');
 const metavm = require('metavm');
 const { DomainError } = require('metautil');
@@ -11,8 +12,7 @@ const { Service } = require('../lib/service.js');
 const {
   EventPublisher,
   SubscriptionManager,
-  PgbossSubscriptions,
-  NatsSubscriptions,
+  JetStreamSubscriptions,
 } = require('../lib/events/index.js');
 
 const servers = process.env.NATS_TEST_SERVERS;
@@ -28,7 +28,7 @@ const createApplication = (kind) => {
     config: {
       server: {
         nats: {
-          servers,
+          servers: servers.split(',').map((server) => server.trim()),
           credentials,
           discovery: { maxWait: 1000 },
         },
@@ -55,7 +55,7 @@ const configureAction = (application, name, method) => {
 };
 
 test(
-  'lib/nats integration - should call actions and deliver events',
+  'lib/nats integration - should call actions',
   { skip, timeout: 10000 },
   async (testContext) => {
     const provider = createApplication('server');
@@ -98,33 +98,98 @@ test(
       consumer.contextStorage.run(context, () => integration.fail()),
       { code: 'E_INTEGRATION' },
     );
+  },
+);
 
-    const publisher = new EventPublisher(null, provider.nats);
-    const subscriptions = new SubscriptionManager(
+test(
+  'lib/nats integration - JetStream retries and resumes durable events',
+  { skip, timeout: 15000 },
+  async (t) => {
+    const application = createApplication('server');
+    const suffix = randomBytes(8).toString('hex');
+    const stream = `EVENTS_TEST_${suffix}`;
+    const eventName = `integration${suffix}:1:message:completed`;
+    const subject = `events.integration${suffix}.1.message.completed`;
+    application.config.server.nats.jetstream = { stream };
+    const nats = new Nats(application);
+    application.nats = nats;
+    let subscriptions = null;
+    let manager = null;
+    let streamCreated = false;
+    t.after(async () => {
+      try {
+        await subscriptions?.stop();
+      } finally {
+        try {
+          if (streamCreated) await manager.streams.delete(stream);
+        } finally {
+          await nats.close();
+        }
+      }
+    });
+    await nats.start();
+    const jetstream = await nats.getJetStream();
+    const { client } = jetstream;
+    manager = jetstream.manager;
+    await manager.streams.add({ name: stream, subjects: [subject] });
+    streamCreated = true;
+
+    const publisher = new EventPublisher();
+    const records = [];
+    publisher.configure({
+      database: {
+        query: async (text, values) => {
+          records.push({
+            id: values[0],
+            name: values[1],
+            subject: values[2],
+            createdAt: values[3],
+            payload: JSON.parse(values[4]),
+          });
+        },
+      },
+    });
+    subscriptions = new SubscriptionManager(
       publisher,
-      new PgbossSubscriptions(null),
-      new NatsSubscriptions(provider.nats),
+      new JetStreamSubscriptions(nats, console, true),
     );
-    const received = Promise.withResolvers();
+    let received = Promise.withResolvers();
+    let attempts = 0;
     await subscriptions.registerEvent({
-      eventName: 'integration:1:completed',
-      eventSubject: 'integration.1.completed',
-      transports: ['nats'],
+      eventName,
+      eventSubject: subject,
     });
     await subscriptions.registerSubscriber({
-      subscriberName: 'audit:1:completed',
-      eventName: 'integration:1:completed',
-      method: (data, event) => received.resolve({ data, event }),
+      subscriberName: 'audit:1:message:completed',
+      eventName,
+      retryDelay: 10,
+      method: (data, event) => {
+        if (++attempts === 1) throw new Error('Retry this event');
+        received.resolve({ data, event });
+      },
     });
     await subscriptions.start();
-    try {
-      await provider.nats.connection.flush();
-      const id = await publisher.emit('integration:1:completed', { value: 42 });
-      const message = await received.promise;
-      assert.deepStrictEqual(message.data, { value: 42 });
-      assert.strictEqual(message.event.id, id);
-    } finally {
-      await subscriptions.stop();
-    }
+
+    // Emulate CDC forwarding; the database path has its own integration test.
+    const deliver = async (payload) => {
+      const id = await publisher.emit(eventName, payload);
+      const record = records.at(-1);
+      await client.publish(subject, Buffer.from(JSON.stringify(record)));
+      return id;
+    };
+    const firstId = await deliver({ value: 42 });
+    const first = await received.promise;
+    assert.deepStrictEqual(first.data, { value: 42 });
+    assert.strictEqual(first.event.id, firstId);
+    assert.strictEqual(attempts, 2);
+    await subscriptions.stop();
+    await nats.connection.flush();
+
+    received = Promise.withResolvers();
+    const secondId = await deliver(null);
+    await subscriptions.start();
+    const second = await received.promise;
+    assert.strictEqual(second.event.id, secondId);
+    assert.strictEqual(second.data, null);
   },
 );

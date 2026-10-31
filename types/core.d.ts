@@ -68,7 +68,7 @@ export type DocumentationUnits = Record<string, DocumentationVersions>;
 export interface DocumentationEvent {
   name: string;
   origin: 'local' | 'remote';
-  transports: Array<'local' | 'nats'>;
+  transports: Array<'nats'>;
   subject: string;
   caption: string;
   description: string;
