@@ -29,7 +29,8 @@ const createEvent = () => ({
 
 const createSubscriber = (options = {}) => ({
   subscriberName: 'feed:1:message:created',
-  eventName: 'chat:1:message:created',
+  stream: 'EVENTS',
+  subject: 'events.chat.1.message.created',
   method: async () => {},
   ...options,
 });
@@ -47,8 +48,10 @@ const createManager = () => {
     ensureStream: async () => transport.available,
     createBinding: (contract) => ({
       subscriberName: contract.subscriberName,
-      eventName: contract.eventName,
+      stream: contract.stream,
+      subject: contract.subject,
       maxMessages: contract.maxMessages,
+      maxAckPending: contract.maxAckPending,
       retryLimit: contract.retryLimit,
       retryDelay: contract.retryDelay,
       timeout: contract.timeout,
@@ -96,8 +99,10 @@ test('subscriptions - load event and subscriber declarations', async () => {
   assert.deepStrictEqual(manager.describeEvents()[0].transports, ['nats']);
   assert.strictEqual(event.caption, 'Message created');
   const subscriber = manager.subscribers['feed:1:message:created'];
-  assert.strictEqual(subscriber.eventName, event.eventName);
+  assert.strictEqual(subscriber.stream, 'EVENTS');
+  assert.strictEqual(subscriber.subject, event.eventSubject);
   assert.strictEqual(subscriber.maxMessages, 5);
+  assert.strictEqual(subscriber.maxAckPending, 50);
   assert.strictEqual(subscriber.retryLimit, 5);
   assert.strictEqual(subscriber.retryDelay, 1000);
   assert.strictEqual(subscriber.timeout, 30000);
@@ -170,41 +175,79 @@ test('subscriptions - propagate stream failure before binding', async () => {
     throw failure;
   };
   await manager.registerSubscriber(createSubscriber());
-  await assert.rejects(manager.start(), (error) => error === failure);
+  await assert.rejects(manager.start(), {
+    message: 'Failed to reconcile event subscribers',
+    cause: failure,
+  });
   assert.strictEqual(manager.started, false);
-  assert.deepStrictEqual(calls, []);
+  assert.deepStrictEqual(calls, [['error', failure]]);
   await manager.stop();
 });
 
-test('subscriptions - consume without local declarations', async () => {
+test('subscriptions - isolates missing streams', async (t) => {
+  for (const missingFirst of [true, false]) {
+    const { manager, transport } = createManager();
+    t.after(() => manager.stop());
+    const events = createSubscriber();
+    const cdc = createSubscriber({
+      subscriberName: 'replica:1:users:changed',
+      stream: 'CDC',
+      subject: 'cdc.public.users',
+    });
+    transport.ensureStream = async (stream) => stream === 'EVENTS';
+    const contracts = missingFirst ? [cdc, events] : [events, cdc];
+    for (const contract of contracts) {
+      await manager.registerSubscriber(contract);
+    }
+    await manager.start();
+    assert.strictEqual(manager.active.size, 1);
+    assert.ok(manager.active.has(events.subscriberName));
+    assert.ok(manager.retryTimer);
+    transport.ensureStream = async () => true;
+    await manager.synchronize();
+    assert.strictEqual(manager.active.size, 2);
+    assert.strictEqual(manager.retryTimer, null);
+  }
+});
+
+test('subscriptions - forwards full JSON and context', async () => {
   const { manager } = createManager();
   let received;
   const subscriber = createSubscriber({
-    method: (payload, event) => {
-      received = { payload, event };
+    method: (message, context) => {
+      received = { message, context };
+      return 'handled';
     },
   });
   await manager.registerSubscriber(subscriber);
   await manager.start();
   try {
-    const record = {
-      id: 'event-1',
-      name: subscriber.eventName,
-      createdAt: '2026-10-31T00:00:00.000Z',
-      payload: null,
-    };
-    const signal = new AbortController().signal;
-    const { handle } = manager.active.get(subscriber.subscriberName);
-    await handle.dispatch(record, { signal });
-    assert.deepStrictEqual(received, {
-      payload: null,
-      event: {
-        id: record.id,
-        name: record.name,
-        createdAt: record.createdAt,
-        signal,
+    const messages = [
+      {
+        id: 'event-1',
+        name: 'chat:1:message:created',
+        createdAt: '2026-10-31T00:00:00.000Z',
+        payload: null,
       },
-    });
+      {
+        before: null,
+        after: { id: 42 },
+        op: 'c',
+        source: { table: 'users', lsn: 100 },
+      },
+      null,
+      ['value', 42],
+      'message',
+      42,
+      false,
+    ];
+    const context = { signal: new AbortController().signal };
+    const { handle } = manager.active.get(subscriber.subscriberName);
+    for (const message of messages) {
+      assert.strictEqual(await handle.dispatch(message, context), 'handled');
+      assert.strictEqual(received.message, message);
+      assert.strictEqual(received.context, context);
+    }
   } finally {
     await manager.stop();
   }
@@ -229,19 +272,22 @@ test('subscriptions - update a handler without rebinding', async () => {
   await manager.stop();
 });
 
-test('subscriptions - rebind on event or options changes', async () => {
+test('subscriptions - rebinds when routing or options change', async () => {
   const { manager, calls } = createManager();
   const subscriber = createSubscriber();
   await manager.registerSubscriber(subscriber);
   await manager.start();
-  await manager.registerSubscriber({ ...subscriber, maxMessages: 10 });
-  await manager.registerSubscriber({
-    ...subscriber,
-    eventName: 'profile:1:details:updated',
-  });
+  const updated = { ...subscriber, maxMessages: 10 };
+  await manager.registerSubscriber(updated);
+  const moved = {
+    ...updated,
+    subject: 'events.profile.1.details.updated',
+  };
+  await manager.registerSubscriber(moved);
+  await manager.registerSubscriber({ ...moved, stream: 'OTHER_EVENTS' });
   assert.deepStrictEqual(
     calls.map((call) => call[0]),
-    ['bind', 'stop', 'bind', 'stop', 'bind'],
+    ['bind', 'stop', 'bind', 'stop', 'bind', 'stop', 'bind'],
   );
   await manager.removeSubscriber(subscriber.subscriberName);
   assert.strictEqual(manager.active.size, 0);

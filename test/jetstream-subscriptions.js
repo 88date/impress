@@ -16,7 +16,8 @@ const createTransport = (managesTopology = true, jetstream = {}) => {
 
 const createContract = (options = {}) => ({
   subscriberName: 'feed:1:message:created',
-  eventName: 'chat:1:message:created',
+  stream: 'EVENTS',
+  subject: 'events.chat.1.message.created',
   ...options,
 });
 
@@ -55,7 +56,7 @@ test('JetStream - instances share readable durable names', () => {
     createContract({ subscriberName: 'audit:1:message:created' }),
   );
   const moved = transport.createBinding(
-    createContract({ eventName: 'chat:1:message:updated' }),
+    createContract({ subject: 'events.chat.1.message.updated' }),
   );
   const prefixed = createTransport(true, { consumerPrefix: 'backend' });
   const separate = prefixed.createBinding(createContract());
@@ -68,18 +69,37 @@ test('JetStream - instances share readable durable names', () => {
   assert.notStrictEqual(first.consumerName, other.consumerName);
   assert.notStrictEqual(first.consumerName, moved.consumerName);
   assert.notStrictEqual(first.consumerName, separate.consumerName);
-  assert.strictEqual(first.eventSubject, 'events.chat.1.message.created');
+  assert.strictEqual(first.subject, 'events.chat.1.message.created');
+  assert.strictEqual(first.stream, 'EVENTS');
+});
+
+test('JetStream - uses explicit streams and subject filters', () => {
+  const transport = createTransport();
+  const subjects = [
+    'cdc.public.*',
+    'cdc.public.>',
+    'cdc.public.%2A',
+    'cdc.public.table',
+    'cdc.public:table',
+  ];
+  const names = new Set();
+  for (const subject of subjects) {
+    const binding = transport.createBinding(
+      createContract({ stream: 'CDC', subject }),
+    );
+    assert.strictEqual(binding.stream, 'CDC');
+    assert.strictEqual(binding.subject, subject);
+    assert.strictEqual(binding.options.filter_subject, subject);
+    assert.doesNotMatch(binding.consumerName, /[.*>]/);
+    names.add(binding.consumerName);
+  }
+  assert.strictEqual(names.size, subjects.length);
 });
 
 test('JetStream - waits for externally provisioned streams', async () => {
-  const cases = [
-    [{}, 'EVENTS'],
-    [{ replicas: 3 }, 'EVENTS'],
-    [{ stream: 'CUSTOM_EVENTS', replicas: 3 }, 'CUSTOM_EVENTS'],
-  ];
-  for (const [config, stream] of cases) {
-    const owner = createTransport(true, config);
-    const passive = createTransport(false, config);
+  for (const stream of ['EVENTS', 'CDC']) {
+    const owner = createTransport(true);
+    const passive = createTransport(false);
     const manager = {
       streams: {
         info: async (name) => {
@@ -93,8 +113,8 @@ test('JetStream - waits for externally provisioned streams', async () => {
     const getJetStream = async () => ({ manager });
     owner.nats.getJetStream = getJetStream;
     passive.nats.getJetStream = getJetStream;
-    assert.strictEqual(await passive.ensureStream(), false);
-    assert.strictEqual(await owner.ensureStream(), false);
+    assert.strictEqual(await passive.ensureStream(stream), false);
+    assert.strictEqual(await owner.ensureStream(stream), false);
   }
 });
 
@@ -117,9 +137,9 @@ test('JetStream - reuses existing stream settings and messages', async () => {
         },
       },
     });
-    assert.strictEqual(await transport.ensureStream(), true);
+    assert.strictEqual(await transport.ensureStream('EVENTS'), true);
     config.replicas = 1;
-    assert.strictEqual(await transport.ensureStream(), true);
+    assert.strictEqual(await transport.ensureStream('EVENTS'), true);
   }
 });
 
@@ -137,7 +157,7 @@ test('JetStream - propagates stream lookup errors', async () => {
     };
     transport.nats.getJetStream = async () => ({ manager });
     await assert.rejects(
-      transport.ensureStream(),
+      transport.ensureStream('EVENTS'),
       (error) => error === failure,
     );
   }
@@ -147,10 +167,10 @@ test('JetStream - stream preparation waits for a connection', async () => {
   const transport = createTransport();
   transport.nats.getJetStream = () => assert.fail('Connection is unavailable');
   transport.nats.connection = null;
-  assert.strictEqual(await transport.ensureStream(), false);
+  assert.strictEqual(await transport.ensureStream('EVENTS'), false);
   transport.nats.connection = {};
   transport.nats.isStopping = true;
-  assert.strictEqual(await transport.ensureStream(), false);
+  assert.strictEqual(await transport.ensureStream('EVENTS'), false);
 });
 
 test('JetStream - only owner creates missing consumers', async () => {
@@ -172,39 +192,108 @@ test('JetStream - only owner creates missing consumers', async () => {
   assert.deepStrictEqual(calls, [[binding.stream, binding.options]]);
 });
 
-test('JetStream - updates retry policy without deleting backlog', async () => {
+test('JetStream - sets the initial pending limit from the declaration', () => {
+  const transport = createTransport();
+  for (const maxAckPending of [undefined, -1, 1, 50]) {
+    const binding = transport.createBinding(createContract({ maxAckPending }));
+    assert.strictEqual(binding.maxAckPending, maxAckPending);
+    assert.strictEqual(binding.options.max_ack_pending, maxAckPending ?? -1);
+  }
+});
+
+test('JetStream - only owner applies an explicit pending limit', async () => {
   const owner = createTransport();
   const passive = createTransport(false);
-  const binding = owner.createBinding(createContract({ retryLimit: 5 }));
-  const calls = [];
-  const manager = {
-    consumers: {
-      info: async () => ({ config: { ...binding.options, max_deliver: 3 } }),
-      update: async (...args) => calls.push(args),
-    },
-  };
-  assert.strictEqual(await passive.ensureConsumer(manager, binding), false);
-  assert.deepStrictEqual(calls, []);
-  assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
-  assert.deepStrictEqual(calls, [
-    [binding.stream, binding.consumerName, { max_deliver: 6 }],
-  ]);
+  for (const maxAckPending of [-1, 1, 50]) {
+    const binding = owner.createBinding(createContract({ maxAckPending }));
+    const info = {
+      config: {
+        ...binding.options,
+        max_ack_pending: maxAckPending === 1 ? 50 : 1,
+        max_deliver: -1,
+        ack_wait: 5_000_000_000,
+        backoff: [5_000_000_000, 10_000_000_000],
+      },
+      delivered: { consumer_seq: 42, stream_seq: 42 },
+      ack_floor: { consumer_seq: 41, stream_seq: 41 },
+    };
+    const original = structuredClone(info);
+    const calls = [];
+    const manager = {
+      consumers: {
+        info: async () => info,
+        add: () => assert.fail('Unexpected consumer creation'),
+        delete: () => assert.fail('Unexpected consumer deletion'),
+        update: async (stream, name, options) => {
+          calls.push([stream, name, options]);
+          Object.assign(info.config, options);
+        },
+      },
+    };
+    assert.strictEqual(await passive.ensureConsumer(manager, binding), false);
+    assert.deepStrictEqual(calls, []);
+    assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
+    assert.strictEqual(await passive.ensureConsumer(manager, binding), true);
+    assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
+    assert.deepStrictEqual(calls, [
+      [binding.stream, binding.consumerName, { max_ack_pending: maxAckPending }],
+    ]);
+    original.config.max_ack_pending = maxAckPending;
+    assert.deepStrictEqual(info, original);
+  }
+});
+
+test('JetStream - preserves existing consumer delivery settings', async () => {
+  for (const managesTopology of [true, false]) {
+    const transport = createTransport(managesTopology);
+    const binding = transport.createBinding(createContract({ retryLimit: 5 }));
+    const info = {
+      config: {
+        ...binding.options,
+        ack_wait: 5_000_000_000,
+        max_deliver: -1,
+        max_ack_pending: 1,
+        backoff: [5_000_000_000, 10_000_000_000],
+        replay_policy: 'original',
+      },
+      delivered: { consumer_seq: 42, stream_seq: 42 },
+      ack_floor: { consumer_seq: 41, stream_seq: 41 },
+    };
+    const original = structuredClone(info);
+    const manager = {
+      consumers: {
+        info: async () => info,
+        add: () => assert.fail('Unexpected consumer creation'),
+        update: () => assert.fail('Unexpected consumer update'),
+        delete: () => assert.fail('Unexpected consumer deletion'),
+      },
+    };
+    assert.strictEqual(await transport.ensureConsumer(manager, binding), true);
+    assert.deepStrictEqual(info, original);
+  }
 });
 
 test('JetStream - rejects a conflicting durable configuration', async () => {
   const transport = createTransport();
   const binding = transport.createBinding(createContract());
-  const manager = {
-    consumers: {
-      info: async () => ({
-        config: { ...binding.options, filter_subject: 'events.>' },
-      }),
-    },
-  };
-  await assert.rejects(
-    transport.ensureConsumer(manager, binding),
-    /Conflicting JetStream consumer/,
-  );
+  const cases = [
+    { filter_subject: 'events.>' },
+    { ack_policy: 'none' },
+    { ack_policy: 'all' },
+    { deliver_subject: 'consumer.push' },
+  ];
+  for (const options of cases) {
+    const manager = {
+      consumers: {
+        info: async () => ({ config: { ...binding.options, ...options } }),
+        update: () => assert.fail('Unexpected consumer update'),
+      },
+    };
+    await assert.rejects(
+      transport.ensureConsumer(manager, binding),
+      /Conflicting JetStream consumer/,
+    );
+  }
 });
 
 test('JetStream - propagate lookup permission errors', async () => {
@@ -225,7 +314,7 @@ test('JetStream - propagate lookup permission errors', async () => {
   );
 });
 
-test('JetStream - rejects changed initial delivery options', async () => {
+test('JetStream - preserves existing initial delivery options', async () => {
   const transport = createTransport();
   const cases = [
     { deliverPolicy: 'new' },
@@ -251,10 +340,7 @@ test('JetStream - rejects changed initial delivery options', async () => {
         delete: () => assert.fail('Unexpected consumer deletion'),
       },
     };
-    await assert.rejects(
-      transport.ensureConsumer(manager, changed),
-      /Conflicting JetStream consumer/,
-    );
+    assert.strictEqual(await transport.ensureConsumer(manager, changed), true);
   }
 });
 

@@ -109,7 +109,8 @@ test('application events - subscribers configure initial delivery', () => {
     path: 'feed/1/messageCreated',
   };
   const declaration = {
-    event: 'chat:1:message:created',
+    stream: 'EVENTS',
+    subject: 'events.chat.1.message.created',
     method: async () => {},
   };
   const transport = application.subscriptions.transport;

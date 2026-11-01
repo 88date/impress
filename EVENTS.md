@@ -89,7 +89,7 @@ normally using autocommit. An adapter backed by `AsyncLocalStorage`, such as
 the application's `db.pg`, can select the current transaction implicitly.
 Prisma transactions need an adapter backed by their own transaction client.
 
-## Debezium message contract
+## Outbox message contract
 
 Configure the CDC pipeline to publish committed outbox inserts to the NATS
 subject stored in `subject`, using JetStream publication with a storage ACK.
@@ -106,29 +106,34 @@ and JSON conversion so the message body has this shape:
 }
 ```
 
-`subject` in the body is optional; the other fields are required. `createdAt`
-must be a date string and `payload` must be the decoded JSON value. The
-subscriber does not unwrap Debezium's raw `before`/`after` envelope or parse a
-stringified JSON payload. Forwarding only the payload loses required metadata.
-Delete events and tombstones from outbox cleanup must not be forwarded.
+For outbox events, `subject` in the body is optional; the other fields are
+required by this message contract. `createdAt` must be a date string and
+`payload` must be the decoded JSON value. Forwarding only the payload loses
+the event metadata. Delete events and tombstones from outbox cleanup must not
+be forwarded.
+
+Subscribers receive the complete decoded JSON without extracting `payload`
+or unwrapping Debezium envelopes. Other subjects can carry a different JSON
+structure, including CDC messages with `before`, `after`, `op` and `source`.
+Arrays, scalar values and JSON `null` are also passed through unchanged.
 
 Debezium connectors, transformations and outbox cleanup
 are application infrastructure and are not configured by Impress.
 
 ## JetStream configuration
 
-The event stream must be provisioned outside Impress, for example by an
-initialization service in the Debezium deployment. It defaults to `EVENTS`
-and must capture `events.>`. Configure storage, retention, limits and replicas
-in that deployment. Limits retention allows independent subscribers to read
-the same events and durable consumers to resume after downtime. JetStream
-must be enabled for the NATS account.
+Each subscriber selects an existing stream through its `stream` field.
+Provision streams outside Impress, for example in the Debezium deployment.
+For outbox events, an `EVENTS` stream can capture `events.>`. Configure storage,
+retention, limits and replicas in that deployment. Limits retention allows
+independent subscribers to read the same events and durable consumers to
+resume after downtime. JetStream must be enabled for the NATS account.
 
 Impress only checks whether the stream exists; it never creates or updates
 it. `nats.jetstream.replicas` remains a default for new task streams and has
 no effect on events. See [TASKS.md](TASKS.md).
 
-The application can select another stream name and a consumer namespace:
+The application configures its connection and consumer namespace:
 
 ```js
 ({
@@ -138,7 +143,6 @@ The application can select another stream name and a consumer namespace:
     credentials: 'application.creds',
     discovery: { maxWait: 1000 },
     jetstream: {
-      stream: 'EVENTS',
       consumerPrefix: 'impress',
     },
   },
@@ -147,21 +151,23 @@ The application can select another stream name and a consumer namespace:
 ```
 
 These fields belong to `server` configuration. Set `server.events: true` on
-instances that manage subscriber consumers. Every server worker in these
-instances can create missing consumers and update consumer delivery options,
-independently of its discovery role.
-Replicas use the same stream and consumer names and delivery options. Workers
-with `server.events: false` only attach to matching existing consumers. If the
-stream or a consumer is missing, or consumer options await an update, they
-retry once per second in the background. Managing instances also wait for
-the stream to be provisioned. Without subscribers, no stream lookup is made.
+instances that create missing subscriber consumers and apply explicitly set
+`maxAckPending`, independently of their discovery role. Existing consumers keep
+their other settings and saved position; Impress does not recreate them.
+Replicas use the same stream and consumer names. Workers with
+`server.events: false` only attach to existing consumers. If the stream or a
+consumer is missing, or an explicit `maxAckPending` differs from the consumer's
+setting, they retry once per second in the background. Managing instances also
+wait for the stream to be provisioned. Without subscribers, no stream lookup
+is made.
 
 `nats.servers` is an array of addresses, including when there is only one
 server. For a comma-separated environment variable, configure it as
 `process.env.NATS_SERVERS?.split(',').map((server) => server.trim())`.
 
-The `server.events` flag controls consumer creation and updates. With `false`,
-server workers still consume using existing consumers.
+The `server.events` flag controls consumer creation and updates to an explicit
+`maxAckPending`. With `false`, server workers still consume using existing
+consumers once their configuration matches.
 Outbox publication and catalog discovery continue independently of this flag.
 
 NATS permissions must allow reading stream and consumer information, pulling
@@ -186,19 +192,25 @@ The subscriber's `deliverPolicy` selects where a new consumer starts reading:
 All modes continue with subsequent messages. `startSequence` is a stream
 sequence number, not an outbox event ID. `startTime` is an RFC 3339 string,
 for example `'2026-10-31T00:00:00Z'`, referring to when NATS stored the message,
-not the outbox `createdAt`. These options are configured only in individual
-subscriber declarations.
+not the outbox `createdAt`. These options can be set in subscriber declarations
+for new consumers or in the infrastructure when provisioning consumers.
 Only the start option required by the selected policy is sent to NATS.
-Each subscriber currently filters one exact subject, so `last_per_subject`
-has the same effect as `last`.
 
 The policy and starting point apply only when creating a consumer. Restarts
 resume its saved position, including with `new`: retained events published
-during downtime are still delivered. Initial delivery options cannot be
-changed on an existing consumer. Impress reports a configuration conflict
-instead of deleting or resetting it. To choose a new starting point, create
+during downtime are still delivered. Initial delivery options in a declaration
+do not override an existing consumer. To choose a new starting point, create
 a separately named subscriber or explicitly retire the existing consumer
 in the infrastructure before recreating it.
+
+Existing consumers must use pull delivery, explicit acknowledgments and the
+subscriber's exact subject filter. An explicitly set `maxAckPending` is applied
+to the consumer's `max_ack_pending` when Impress connects. Without it, the
+existing value is preserved. Other settings, including `max_deliver`,
+`ack_wait`, `backoff` and replay policy, are managed in NATS and preserved.
+For one unacknowledged message at a time across all workers of a subscriber,
+set `maxAckPending: 1` in its declaration. Use `max_deliver: -1` in NATS for
+unlimited delivery attempts. No `sequential` flag is needed.
 
 ## Subscribers
 
@@ -206,47 +218,64 @@ in the infrastructure before recreating it.
 
 ```js
 ({
-  event: 'chat:1:message:created',
+  stream: 'EVENTS',
+  subject: 'events.chat.1.message.created',
   deliverPolicy: 'new',
   maxMessages: 5,
+  maxAckPending: -1,
   retryLimit: 5,
   retryDelay: 1000,
   timeout: 30000,
-  method: async (data, event) => {
-    await domain.feed.append(data, event.id);
+  method: async (message, context) => {
+    await domain.feed.append(message.payload, message.id);
   },
 });
 ```
 
-Here `deliverPolicy: 'new'` explicitly selects the mode for this subscriber.
-Without it, the subscriber uses `new`. The same declaration can include
+`stream` and `subject` are required. The subject is passed directly to NATS
+as the consumer filter and may include `*` or `>`. Each subscriber can select
+a different stream. A missing stream leaves its subscribers waiting while
+subscribers of available streams continue connecting.
+
+Here `deliverPolicy: 'new'` selects the mode when creating the consumer.
+Without it, a new consumer uses `new`. The same declaration can include
 `startSequence` or `startTime` for the corresponding mode. For example, set
 `deliverPolicy: 'by_start_time'` and `startTime: '2026-10-31T00:00:00Z'`.
 
 The subscriber name is `feed:1:message:created`. The durable consumer name
-joins `consumerPrefix`, `subscriberName` and `eventSubject` with `|`. Subject
+joins `consumerPrefix`, `subscriberName` and `subject` with `|`. Subject
 dots become colons in this name; the actual NATS subject is unchanged:
 
 ```text
 impress|feed:1:message:created|events:chat:1:message:created
 ```
 
-The parts are joined directly without encoding. `consumerPrefix` uses
-letters, digits, `_` or `-`; the default is `impress`. The `|` delimiter is
-reserved for joining parts and must not occur within them. Names following
-this convention keep the same durable names as before. No instance or worker
-ID enters the name. Copies of the same subscriber share work; different names
-receive independent copies.
+Subject tokens are URI-encoded, including `*`, before joining them with `:`.
+Existing `events.chat.1.message.created` filters keep their previous durable
+names. `consumerPrefix` uses letters, digits, `_` or `-`; the default is
+`impress`. Prefixes and subscriber names must not contain the `|` delimiter.
+No instance or worker ID enters the name. Copies of the same subscriber share
+work; different names receive independent copies.
 Applications that need independent copies for identical subscriber names must
 use different consumer prefixes. Replicas of one application use the same
 prefix and stream.
 
-Subscribers receive `payload` as their first argument and
-`{ id, name, createdAt, signal }` as their second argument. They can consume
-events declared by another application without a local event declaration.
+Subscribers use `method(message, context)`: the first argument is the entire
+decoded JSON message, and the second is `{ signal }` for cancellation. Outbox
+handlers read `message.payload`, `message.id`, `message.name` and
+`message.createdAt`; CDC handlers read their own envelope fields. Subscribers
+can consume messages without a local event declaration.
+
+`SubscriberDeclaration<Message>` describes the complete message type, not
+just its payload. Its default is `unknown` because a subject can carry any
+JSON value.
 
 - `maxMessages`: JetStream receive buffer size, default 5.
-- `retryLimit`: redeliveries after failure or a missing ACK, default 2.
+- `maxAckPending`: maximum unacknowledged messages across all workers sharing
+  the consumer. Use a positive integer for a limit, or `-1` for no limit.
+  An explicit value applies to both new and existing consumers. If omitted,
+  new consumers use `-1` and existing consumers keep their setting.
+- `retryLimit`: redeliveries configured when creating a consumer, default 2.
 - `retryDelay`: delay after a failed handler in milliseconds, default 0.
 - `timeout`: handler timeout in milliseconds, default 30000.
 
@@ -263,31 +292,40 @@ reconciliation or an application restart can start it again.
 
 Successful handling sends ACK. A JSON decoding error, handler failure or
 timeout sends NAK with `retryDelay`. If a worker disappears without
-acknowledging, JetStream redelivers after `timeout + 1000` milliseconds.
-`retryLimit + 1` bounds total delivery attempts. Exhausted messages remain
+acknowledging, JetStream uses the consumer's `ack_wait` or `backoff` to schedule
+redelivery. When creating a consumer, Impress sets `ack_wait` to
+`timeout + 1000` milliseconds and `max_deliver` to `retryLimit + 1`. These
+defaults do not override an existing consumer. Native `backoff` does not apply
+to the explicit NAK sent by a failed handler; that uses `retryDelay`.
+Keep the consumer's acknowledgment deadline longer than the handler timeout
+to avoid premature redelivery. Exhausted messages remain
 subject to stream retention; Impress does not create a dead-letter queue or
 replay them automatically.
 
-Timeout aborts `event.signal` but cannot forcibly stop JavaScript or undo side
+Timeout aborts `context.signal` but cannot forcibly stop JavaScript or undo side
 effects. Handlers should honor cancellation where possible and be idempotent
-using `event.id`: CDC restarts, missing ACKs and timeouts can cause duplicates.
+using a stable message identifier such as the outbox `message.id`: CDC
+restarts, missing ACKs and timeouts can cause duplicates.
 Concurrent handlers and retries do not guarantee completion order.
 
 New consumers start according to their configured delivery policy. Normal
-restarts resume the existing durable position. Changing the subscriber's event
-selects a different durable consumer. Updating only its method keeps the
-existing consumer and position. Changes to retry limits and acknowledgment
-timeouts update the same consumer without resetting its position.
-Changing `maxMessages` restarts the local reader using the same durable
-consumer and position.
+restarts resume the existing durable position. Changing the subscriber's stream
+or subject selects a different durable consumer. Updating only its method keeps
+the existing consumer and position. Change retry limits and acknowledgment
+deadlines directly in NATS for an existing consumer. The subscriber's
+`timeout` still controls the local handler timeout.
+Changing `maxMessages` or `maxAckPending` restarts the local reader using the
+same durable consumer and position. Removing `maxAckPending` preserves the
+consumer's current limit; set `-1` explicitly to remove the limit.
 
 Shutdown stops new pulls and waits for in-flight handlers to finish or time
 out. Removing a subscriber stops its local handler but does not delete the
 durable consumer or its pending messages. Retiring old consumers is an
 explicit infrastructure operation.
 
-Subscriber declarations require a non-empty `event` string and a `method`
-function. Startup fails if declarations cannot be read, parsed or validated.
+Subscriber declarations require non-empty `stream` and `subject` strings and
+a `method` function. Startup fails if declarations cannot be read, parsed or
+validated.
 A file reload that fails these checks logs the error and retains the last
 working declaration and handler.
 
@@ -298,6 +336,19 @@ startup still fail startup and stop any subscribers already started in that
 attempt.
 
 ## Migration
+
+Replace subscriber `event: 'chat:1:message:created'` with
+`stream: 'EVENTS'` and `subject: 'events.chat.1.message.created'`. Move the stream
+name from `nats.jetstream.stream` into each subscriber. Keeping the same stream,
+subscriber name, consumer prefix and event subject preserves the existing
+durable consumer and its position.
+
+Handlers now receive the full JSON as `method(message, context)`. For outbox
+events, replace the old first argument with `message.payload` and read event
+metadata from `message.id`, `message.name` and `message.createdAt`. The
+cancellation signal remains in the second argument as `context.signal`.
+Update `SubscriberDeclaration<Message>` annotations to describe the complete
+message envelope.
 
 Configure the outbox, application table and CDC pipeline before switching
 publishers and subscribers. Provision the event stream through the Debezium

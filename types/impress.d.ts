@@ -54,7 +54,10 @@ declare global {
     id: string;
     name: string;
     createdAt: string;
-    signal?: AbortSignal;
+  }
+
+  interface SubscriberContext {
+    signal: AbortSignal;
   }
 
   type EventDeclaration<Data = Record<string, unknown>> = {
@@ -63,20 +66,32 @@ declare global {
     examples?: Data[];
   };
 
-  type SubscriberDeclaration<Data = Record<string, unknown>> = {
-    event: string;
+  type SubscriberDeclaration<Message = unknown> = {
+    stream: string;
+    subject: string;
+    /** Initial delivery settings apply only when creating a consumer. */
     deliverPolicy?: DeliverPolicy;
     startSequence?: number;
     startTime?: string;
     /** JetStream receive buffer size, not a handler limit. Defaults to 5. */
     maxMessages?: number;
-    /** Redeliveries after failure or missing ACK. Defaults to 2. */
+    /**
+     * Unacknowledged messages across all workers of this consumer.
+     * Use a positive integer for a limit or -1 for unlimited delivery.
+     * Applied by server.events instances on creation and connection.
+     * Omit to preserve an existing limit; new consumers default to -1.
+     */
+    maxAckPending?: number;
+    /** Redeliveries for a newly created consumer. Defaults to 2. */
     retryLimit?: number;
     /** Delay after a failed handler in milliseconds. Defaults to 0. */
     retryDelay?: number;
     /** Handler timeout in milliseconds. Defaults to 30000. */
     timeout?: number;
-    method: (data: Data, event: EventMetadata) => unknown | Promise<unknown>;
+    method: (
+      message: Message,
+      context: SubscriberContext,
+    ) => unknown | Promise<unknown>;
   };
 
   interface EventDatabase {

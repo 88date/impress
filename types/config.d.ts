@@ -61,8 +61,6 @@ export interface NatsConfig {
   servers?: Array<string>;
   credentials?: string;
   jetstream?: {
-    /** Existing event stream, managed outside Impress. Defaults to EVENTS. */
-    stream?: string;
     consumerPrefix?: string;
     /** Default replicas for new task streams only. Does not configure EVENTS. */
     replicas?: number;

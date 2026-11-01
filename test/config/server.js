@@ -33,7 +33,6 @@
     servers: ['nats://127.0.0.1:4222'],
     credentials: 'test.creds',
     jetstream: {
-      stream: 'EVENTS',
       consumerPrefix: 'impress',
       replicas: 1,
     },

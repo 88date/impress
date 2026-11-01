@@ -44,16 +44,17 @@ const createLoader = (t) => {
   return { loader, manager, errors };
 };
 
+const route = 'stream: "EVENTS", subject: "events.chat.1.message.created"';
 const invalidDeclarations = [
-  ['null', 'Subscriber event name expected'],
-  ['({ method: async () => {} })', 'Subscriber event name expected'],
-  ['({ event: "", method: async () => {} })', 'Subscriber event name expected'],
-  ['({ event: 42, method: async () => {} })', 'Subscriber event name expected'],
-  ['({ event: "chat:1:message:created" })', 'Subscriber method expected'],
-  [
-    '({ event: "chat:1:message:created", method: 42 })',
-    'Subscriber method expected',
-  ],
+  ['null', 'Subscriber stream name expected'],
+  ['({ method: async () => {} })', 'Subscriber stream name expected'],
+  ['({ stream: "" })', 'Subscriber stream name expected'],
+  ['({ stream: 42 })', 'Subscriber stream name expected'],
+  ['({ stream: "EVENTS" })', 'Subscriber subject expected'],
+  ['({ stream: "EVENTS", subject: "" })', 'Subscriber subject expected'],
+  ['({ stream: "EVENTS", subject: 42 })', 'Subscriber subject expected'],
+  [`({ ${route} })`, 'Subscriber method expected'],
+  [`({ ${route}, method: 42 })`, 'Subscriber method expected'],
 ];
 
 test('subscriber loader - invalid declarations reject startup', async (t) => {
@@ -76,14 +77,14 @@ test('subscriber loader - invalid declarations reject startup', async (t) => {
 
 test('subscriber loader - invalid reload preserves the handler', async (t) => {
   const { loader, manager, errors } = createLoader(t);
-  let source = '({ event: "chat:1:message:created", method: () => "working" })';
+  let source = `({ ${route}, method: () => "working" })`;
   t.mock.method(fsp, 'readFile', async () => source);
   await loader.load();
   await manager.start();
   const name = 'feed:1:message:created';
   const contract = manager.subscribers[name];
   const { handle } = manager.active.get(name);
-  const record = { name: contract.eventName, payload: {} };
+  const record = { name: 'chat:1:message:created', payload: {} };
   const file = path.join(loader.path, 'feed.1', 'messageCreated.js');
 
   for (const [invalid] of invalidDeclarations) {
@@ -95,7 +96,7 @@ test('subscriber loader - invalid reload preserves the handler', async (t) => {
   }
   assert.strictEqual(errors.length, invalidDeclarations.length);
 
-  source = '({ event: "chat:1:message:created", method: () => "updated" })';
+  source = `({ ${route}, method: () => "updated" })`;
   await loader.change(file);
 
   assert.notStrictEqual(manager.subscribers[name], contract);
