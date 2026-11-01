@@ -135,7 +135,7 @@ the dedicated events API.
 - **Testing**: integrated node.js native test runner and table-test support
 - **Inter-process** communication and shared memory used for state management
 - **File utilities**: upload, download, support for partial content and streaming
-- **Task Management**: BullMQ queues and NATS JetStream scheduled tasks
+- **Task Management**: NATS JetStream [queues](MQ.md) and [scheduled tasks](TASKS.md)
 
 ## TODO list
 

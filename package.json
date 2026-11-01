@@ -55,7 +55,9 @@
     "lib/",
     "schemas/",
     "types/",
-    "EVENTS.md"
+    "EVENTS.md",
+    "MQ.md",
+    "TASKS.md"
   ],
   "scripts": {
     "test": "npm run lint && npm run types && node --no-warnings --test",
@@ -69,7 +71,6 @@
   "dependencies": {
     "@nats-io/jetstream": "^3.4.0",
     "@nats-io/transport-node": "^3.4.0",
-    "bullmq": "^5.78.0",
     "dayjs": "^1.11.18",
     "metacom": "github:88date/metacom#v3.5.6",
     "metaconfiguration": "^3.0.3",

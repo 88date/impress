@@ -235,8 +235,9 @@ test('JetStream - only owner applies an explicit pending limit', async () => {
     assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
     assert.strictEqual(await passive.ensureConsumer(manager, binding), true);
     assert.strictEqual(await owner.ensureConsumer(manager, binding), true);
+    const updates = { max_ack_pending: maxAckPending };
     assert.deepStrictEqual(calls, [
-      [binding.stream, binding.consumerName, { max_ack_pending: maxAckPending }],
+      [binding.stream, binding.consumerName, updates],
     ]);
     original.config.max_ack_pending = maxAckPending;
     assert.deepStrictEqual(info, original);
@@ -395,18 +396,30 @@ test('JetStream - NAK with configured delay after failure', async () => {
   assert.strictEqual(errors[0][1], failure);
 });
 
-test('JetStream - times out and signals cancellation', async () => {
+test('JetStream - timeout aborts and ignores late completion', async (t) => {
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  const finished = Promise.withResolvers();
   let signal;
-  const { consumer } = createConsumer(
+  const { consumer, errors } = createConsumer(
     (record, context) => {
       signal = context.signal;
-      return new Promise(() => {});
+      return finished.promise;
     },
-    { timeout: 1, retryDelay: 100 },
+    { timeout: 100, retryDelay: 100 },
   );
   const message = createMessage();
-  await consumer.handle(message);
+  const handling = consumer.handle(message);
+  await Promise.resolve();
+  assert.strictEqual(signal.aborted, false);
+  t.mock.timers.tick(100);
+  await handling;
   assert.strictEqual(signal.aborted, true);
+  assert.strictEqual(signal.reason.message, 'Event subscriber timed out');
+  assert.strictEqual(errors[0][1], signal.reason);
+  assert.deepStrictEqual(message.calls, [['nak', 100]]);
+  finished.resolve();
+  await finished.promise;
+  await Promise.resolve();
   assert.deepStrictEqual(message.calls, [['nak', 100]]);
 });
 

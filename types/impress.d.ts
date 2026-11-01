@@ -1,4 +1,4 @@
-import type { DeliverPolicy } from '@nats-io/jetstream';
+import type { BatchAck, DeliverPolicy, PubAck } from '@nats-io/jetstream';
 import type { MsgHdrs } from '@nats-io/transport-node';
 import {
   LogConfig,
@@ -147,11 +147,96 @@ declare global {
     onFailed?: (reason: string, job: TaskJob<Data>) => void | Promise<void>;
   };
 
+  interface MQQueueOptions {
+    /** Existing JetStream stream. Defaults to MQ. */
+    stream?: string;
+    /** JetStream receive buffer size, not a handler limit. Defaults to 5. */
+    maxMessages?: number;
+    /**
+     * Unacknowledged messages across all workers of this queue's consumer.
+     * Use a positive integer for a limit or -1 for unlimited delivery.
+     * Omit to preserve an existing limit; new consumers default to -1.
+     */
+    maxAckPending?: number;
+    /** Delay after a failed handler in milliseconds. Defaults to 0. */
+    retryDelay?: number;
+    /** Handler timeout for the queue in milliseconds. Defaults to 30000. */
+    timeout?: number;
+    /**
+     * Redeliveries after failure or missing ACK: 0 means one delivery,
+     * -1 means unlimited. Omit to preserve an existing limit;
+     * new consumers default to unlimited. Applied to all queue workers.
+     */
+    retryLimit?: number;
+  }
+
+  interface MQJob<Data = Record<string, unknown>>
+    extends TaskJob<Data>, SubscriberContext {}
+
+  type MQDeclaration<Data = Record<string, unknown>, Result = unknown> = {
+    caption?: string;
+    description?: string;
+    parameters?: Record<string, unknown>;
+    method: (data: Data, job: MQJob<Data>) => Result | Promise<Result>;
+  };
+
+  interface MQQueueStatus {
+    stream: string;
+    /** Null when the queue's consumer has not been created. */
+    consumer: string | null;
+    /** Whether this application instance has a running reader. */
+    running: boolean;
+    pending: number;
+    unacknowledged: number;
+  }
+
+  interface MQPublishOptions {
+    /**
+     * Native NATS message ID, unique across the stream's duplicate window.
+     * For delayed tasks, deduplicates the schedule publication.
+     */
+    msgID?: string;
+    /**
+     * Non-negative integer milliseconds, or an integer with ms, s, m, h, d.
+     * Examples: 60000, '15m', '7d'. Zero means immediate publication.
+     * Positive delays require NATS 2.12+ and stream scheduling enabled.
+     */
+    delay?: number | `${number}${'ms' | 's' | 'm' | 'h' | 'd'}`;
+  }
+
+  interface MQBulkJob<Data = unknown> {
+    /** queue:job for mq.addBulk, or job for mq.<queue>.addBulk. */
+    name: string;
+    data: Data;
+    options?: MQPublishOptions;
+  }
+
   const application: Application;
   const context: Context;
   const events: Events;
   const service: Services;
   const tasks: Record<string, TaskDeclaration>;
+
+  namespace mq {
+    /** Publish JSON to mq.<queue>.<job> and await JetStream storage ACK. */
+    function add(
+      name: string,
+      data: unknown,
+      options?: MQPublishOptions,
+    ): Promise<PubAck>;
+    /**
+     * Atomically publish to one stream with allow_atomic enabled.
+     * Returns the native batch ACK, or null for an empty array.
+     * Any duplicate msgID rejects the entire batch.
+     */
+    function addBulk(jobs: MQBulkJob[]): Promise<BatchAck | null>;
+    function getStatus(): Promise<Record<string, MQQueueStatus>>;
+    /** Read queue counts from NATS without requiring a local handler. */
+    function getStatus(
+      name: string,
+      options?: { stream?: string },
+    ): Promise<MQQueueStatus>;
+  }
 
   namespace config {
     const log: LogConfig;

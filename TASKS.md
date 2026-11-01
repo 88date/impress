@@ -147,8 +147,8 @@ callbacks that cause external effects should tolerate retries.
 
 `cron`, `tz`, `data`, `method`, `onCompleted`, and `onFailed` retain their syntax.
 Remove `server.pgboss` and `server.scheduler.notify`. PostgreSQL is no longer
-used for task scheduling or delivery. The separate BullMQ subsystem under
-`application/mq` is unchanged.
+used for task scheduling or delivery. Queues under `application/mq` also use
+NATS JetStream, with a separate API and migration path; see [MQ.md](MQ.md).
 
 pg-boss-specific options such as priority, singleton keys, queue policies,
 groups, polling, expiration, and local concurrency are no longer supported.

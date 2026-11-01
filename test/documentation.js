@@ -167,13 +167,9 @@ test('lib/documentation - should describe application interfaces', () => {
   const queues = describeQueues(
     {
       analysis: {
-        concurrency: 3,
-        defaultJobOptions: {
-          removeOnComplete: 1000,
-          removeOnFail: 5000,
-        },
-        schedules: [{ name: 'enqueueRating', every: 1200000 }],
-        events: { completed: () => {} },
+        stream: 'MQ',
+        maxAckPending: 3,
+        maxMessages: 50,
       },
     },
     {
@@ -182,7 +178,6 @@ test('lib/documentation - should describe application interfaces', () => {
           caption: 'Save rating analysis',
           parameters: { userId: 'string', rating: 'number' },
           method: async () => {},
-          onCompleted: () => {},
         },
         enqueueRating: { method: async () => {} },
       },
@@ -191,13 +186,9 @@ test('lib/documentation - should describe application interfaces', () => {
 
   assert.deepStrictEqual(queues, {
     analysis: {
-      concurrency: 3,
-      defaultJobOptions: {
-        removeOnComplete: 1000,
-        removeOnFail: 5000,
-      },
-      schedules: [{ name: 'enqueueRating', every: 1200000 }],
-      events: {},
+      stream: 'MQ',
+      maxAckPending: 3,
+      maxMessages: 50,
       workers: {
         updateRating: {
           caption: 'Save rating analysis',

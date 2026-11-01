@@ -57,6 +57,7 @@ test('lib/application - should expose documentation to sandbox', async () => {
   assert.strictEqual(typeof getDocumentation, 'function');
   assert.strictEqual(sandboxApplication.scheduler, undefined);
   assert.strictEqual(typeof application.sandbox.tasks, 'object');
+  assert.strictEqual(typeof application.sandbox.mq.add, 'function');
   let catalogReads = 0;
   application.nats = {
     getCatalog: async () => {

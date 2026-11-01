@@ -204,33 +204,61 @@ test('application events - follows lifecycle order', async (t) => {
   t.mock.method(application.subscriptions, 'start', async () => {
     calls.push('subscriptions.start');
   });
+  t.mock.method(application.mq, 'start', async () => {
+    calls.push('mq.start');
+  });
 
   await application.start();
 
-  assert.deepStrictEqual(calls, ['nats.start', 'subscriptions.start']);
+  assert.deepStrictEqual(calls, [
+    'nats.start',
+    'subscriptions.start',
+    'mq.start',
+  ]);
 
   calls.length = 0;
+  const entered = Promise.withResolvers();
+  const drained = Promise.withResolvers();
   t.mock.method(application.subscriptions, 'stop', async () => {
     calls.push('subscriptions.stop');
+  });
+  t.mock.method(application.mq, 'stop', async () => {
+    calls.push('mq.stop');
+    entered.resolve();
+    await drained.promise;
   });
   t.mock.method(application.nats, 'close', async () => {
     calls.push('nats.close');
   });
-  for (const target of [
-    application.modules,
-    application.domain,
-    application.integration,
-    application.tasks,
-    application.mq,
-    application.db,
-    application.lib,
-  ]) {
-    t.mock.method(target, 'stop', async () => {});
+  const dependencies = [
+    'modules',
+    'domain',
+    'integration',
+    'tasks',
+    'db',
+    'lib',
+  ];
+  for (const name of dependencies) {
+    t.mock.method(application[name], 'stop', async () => {
+      calls.push(name + '.stop');
+    });
   }
 
-  await application.shutdown();
+  const closing = application.shutdown();
+  await entered.promise;
+  try {
+    assert.deepStrictEqual(calls, ['subscriptions.stop', 'mq.stop']);
+  } finally {
+    drained.resolve();
+  }
+  await closing;
 
-  assert.deepStrictEqual(calls, ['subscriptions.stop', 'nats.close']);
+  assert.deepStrictEqual(calls, [
+    'subscriptions.stop',
+    'mq.stop',
+    'nats.close',
+    ...dependencies.map((name) => name + '.stop'),
+  ]);
 });
 
 test('application events - load failure prevents startup', async (t) => {
