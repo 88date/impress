@@ -1,4 +1,5 @@
 import type { DeliverPolicy } from '@nats-io/jetstream';
+import type { MsgHdrs } from '@nats-io/transport-node';
 import {
   LogConfig,
   ScaleConfig,
@@ -58,6 +59,7 @@ declare global {
 
   interface SubscriberContext {
     signal: AbortSignal;
+    headers?: MsgHdrs;
   }
 
   type EventDeclaration<Data = Record<string, unknown>> = {

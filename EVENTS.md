@@ -261,10 +261,16 @@ use different consumer prefixes. Replicas of one application use the same
 prefix and stream.
 
 Subscribers use `method(message, context)`: the first argument is the entire
-decoded JSON message, and the second is `{ signal }` for cancellation. Outbox
-handlers read `message.payload`, `message.id`, `message.name` and
-`message.createdAt`; CDC handlers read their own envelope fields. Subscribers
-can consume messages without a local event declaration.
+decoded JSON message, and the second is `{ signal, headers }`. `signal`
+supports cancellation. Outbox handlers read `message.payload`, `message.id`,
+`message.name` and `message.createdAt`; CDC handlers read their own envelope
+fields. Subscribers can consume messages without a local event declaration.
+
+`context.headers` contains the original NATS `MsgHdrs` object, or `undefined`
+when the message has no headers. Use `context.headers?.get('Changed')` to read
+the first value, or `context.headers?.values('Changed')` to read all values of
+a repeated header. Header names and string values are passed through unchanged;
+Impress does not parse JSON in headers or add fields to the message body.
 
 `SubscriberDeclaration<Message>` describes the complete message type, not
 just its payload. Its default is `unknown` because a subject can carry any
