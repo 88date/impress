@@ -80,6 +80,97 @@ const stopResources = async (resources) => {
 };
 
 test(
+  'mq integration - concurrent workers create the default stream',
+  { skip: !binary, timeout: 10000 },
+  async (t) => {
+    const resources = {
+      directory: null,
+      server: null,
+      connections: [],
+      consumers: [],
+      workers: [],
+      gates: [],
+    };
+    t.after(() => stopResources(resources));
+    const servers = await startServer(resources);
+    const observed = [];
+    const errors = [];
+    for (let index = 0; index < 2; index++) {
+      const root = path.join(resources.directory, 'application-' + index);
+      const application = {
+        absolute: (name) => path.join(root, name),
+        kind: 'worker',
+        config: { server: { nats: {} } },
+        sandbox: {
+          execute: (data) => observed.push({ data, receivedAt: Date.now() }),
+        },
+        console: { error: (...args) => errors.push(args) },
+        watcher: { watch() {} },
+      };
+      const nats = new Nats(application);
+      nats.connection = await connect({ servers, reconnect: false });
+      application.nats = nats;
+      resources.connections.push(nats);
+      const mq = new MQ('mq', application);
+      resources.consumers.push(mq);
+      const directory = path.join(mq.path, 'bootstrap');
+      await mkdir(directory, { recursive: true });
+      await writeFile(
+        path.join(directory, 'run.js'),
+        '({ method: async (data) => execute(data) })',
+      );
+      await mq.load();
+    }
+    const { manager } = await resources.connections[0].getJetStream();
+    await assert.rejects(manager.streams.info('MQ'), { code: 10059 });
+    await Promise.all(resources.consumers.map((mq) => mq.start()));
+    for (const mq of resources.consumers) {
+      assert.strictEqual(mq.consumers.bootstrap.running, true);
+    }
+    const streams = await manager.streams.list().next();
+    assert.strictEqual(streams.length, 1);
+    const { config } = streams[0];
+    assert.strictEqual(config.name, 'MQ');
+    assert.deepStrictEqual(config.subjects, ['mq.>']);
+    assert.strictEqual(config.storage, 'file');
+    assert.strictEqual(config.retention, 'workqueue');
+    assert.strictEqual(config.num_replicas, 1);
+    assert.strictEqual(config.allow_msg_schedules, true);
+    assert.strictEqual(config.allow_atomic, true);
+
+    const [first, second] = resources.consumers;
+    await first.tree.bootstrap.run({ id: 'ordinary' });
+    const delayedAt = Date.now() + 150;
+    await second.tree.add(
+      'bootstrap:run',
+      { id: 'delayed' },
+      { delay: '150ms' },
+    );
+    const batch = await first.tree.bootstrap.addBulk([
+      { name: 'run', data: { id: 'batch-first' } },
+      { name: 'run', data: { id: 'batch-last' } },
+    ]);
+    assert.strictEqual(batch.count, 2);
+    await waitFor(async () => {
+      const info = await manager.streams.info('MQ');
+      return observed.length >= 4 && info.state.messages === 0;
+    }, t.signal);
+    assert.deepStrictEqual(observed.map(({ data }) => data.id).sort(), [
+      'batch-first',
+      'batch-last',
+      'delayed',
+      'ordinary',
+    ]);
+    const delayed = observed.find(({ data }) => data.id === 'delayed');
+    assert.ok(delayed.receivedAt >= delayedAt);
+    const info = await manager.consumers.info('MQ', 'mq-bootstrap');
+    assert.strictEqual(info.num_pending, 0);
+    assert.strictEqual(info.num_ack_pending, 0);
+    assert.deepStrictEqual(errors, []);
+  },
+);
+
+test(
   'mq integration - consumes tasks on an isolated NATS server',
   { skip: !binary, timeout: 30000 },
   async (t) => {

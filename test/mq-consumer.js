@@ -95,6 +95,87 @@ test('mq consumer - creates the requested delivery limit', async () => {
   }
 });
 
+test('mq consumer - creates missing MQ before its consumer', async (t) => {
+  for (const [jetstream, replicas] of [
+    [undefined, 1],
+    [{ replicas: 3 }, 3],
+  ]) {
+    const calls = [];
+    const nativeConsumer = {};
+    const addStream = t.mock.fn(async () => calls.push('stream'));
+    const addConsumer = t.mock.fn(async () => calls.push('consumer'));
+    const manager = {
+      streams: { add: addStream },
+      consumers: {
+        info: async () => {
+          throw Object.assign(new Error('Stream not found'), { code: 10059 });
+        },
+        add: addConsumer,
+      },
+    };
+    const client = { consumers: { get: async () => nativeConsumer } };
+    const nats = {
+      application: { config: { server: { nats: { jetstream } } } },
+      getJetStream: async () => ({ client, manager }),
+    };
+    const consumer = await MQConsumer.create(nats, 'test', {});
+    assert.strictEqual(consumer.consumer, nativeConsumer);
+    assert.strictEqual(consumer.running, false);
+    assert.deepStrictEqual(calls, ['stream', 'consumer']);
+    assert.deepStrictEqual(addStream.mock.calls[0].arguments, [
+      {
+        name: 'MQ',
+        subjects: ['mq.>'],
+        storage: 'file',
+        retention: 'workqueue',
+        num_replicas: replicas,
+        allow_msg_schedules: true,
+        allow_atomic: true,
+      },
+    ]);
+    assert.strictEqual(addConsumer.mock.calls[0].arguments[0], 'MQ');
+    assert.strictEqual(
+      addConsumer.mock.calls[0].arguments[1].durable_name,
+      'mq-test',
+    );
+  }
+});
+
+test('mq consumer - preserves lookup and creation errors', async (t) => {
+  const missing = Object.assign(new Error('Stream not found'), { code: 10059 });
+  const permission = new Error('Permission denied');
+  const cases = [
+    ['CUSTOM', 'lookup', missing],
+    ['MQ', 'lookup', permission],
+    ['MQ', 'create', permission],
+  ];
+  for (const [stream, phase, error] of cases) {
+    const addStream = t.mock.fn(async () => {
+      throw error;
+    });
+    const addConsumer = t.mock.fn();
+    const manager = {
+      streams: { add: addStream },
+      consumers: {
+        info: async () => {
+          throw phase === 'lookup' ? error : missing;
+        },
+        add: addConsumer,
+      },
+    };
+    const nats = {
+      application: { config: { server: { nats: {} } } },
+      getJetStream: async () => ({ manager }),
+    };
+    await assert.rejects(
+      MQConsumer.create(nats, 'test', {}, { stream }),
+      (reason) => reason === error,
+    );
+    assert.strictEqual(addStream.mock.callCount(), phase === 'create' ? 1 : 0);
+    assert.strictEqual(addConsumer.mock.callCount(), 0);
+  }
+});
+
 test('mq consumer - updates only explicitly changed limits', async () => {
   const original = {
     filter_subject: 'mq.test.*',

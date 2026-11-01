@@ -62,7 +62,7 @@ export interface NatsConfig {
   credentials?: string;
   jetstream?: {
     consumerPrefix?: string;
-    /** Default replicas for new task streams only. Does not configure EVENTS. */
+    /** Default replicas for new TASKS and MQ streams. */
     replicas?: number;
   };
   discovery: {

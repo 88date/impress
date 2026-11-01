@@ -2,7 +2,8 @@
 
 MQ publishes JSON tasks through NATS JetStream and dispatches them to regular
 application workers. It uses `server.nats`; Redis is not required.
-Infrastructure owns the streams.
+The first worker with MQ handlers creates the default `MQ` stream if missing.
+Custom streams are provisioned by infrastructure.
 
 ## Handlers
 
@@ -194,11 +195,18 @@ also cancels delivery. See the
 | `retryDelay`    | Delay after a failed handler, in milliseconds           | `0`                                     |
 | `timeout`       | Handler deadline, in milliseconds                       | `30000`                                 |
 
-Infrastructure must create the stream before consumption or publication, for
-example `MQ` with `subjects: ['mq.>']`, file storage, and work-queue retention.
-Queue settings do not provision streams or change how publication routes by
-subject. Publishers need publication and acknowledgment permissions; workers
-also need consumer management and consumption permissions.
+When a worker starts consuming the default `MQ` stream and it is missing,
+Impress creates it with `subjects: ['mq.>']`, file storage, work-queue retention,
+and both `allow_msg_schedules` and `allow_atomic` enabled. Replicas default to
+`server.nats.jetstream.replicas`, then `1`. Existing stream settings are preserved.
+Workers need stream-creation permission for this initial setup, in addition to
+consumer management and consumption permissions.
+
+A custom `stream` must already exist and use subjects that do not overlap other
+streams. Publication routes by subject, independently of queue configuration.
+Publishers need publication and acknowledgment permissions; they do not create
+streams. Before publishing from a producer-only service, start a worker with
+handlers using `MQ`, or provision the stream through infrastructure.
 
 ## Delivery and lifecycle
 
