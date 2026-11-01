@@ -122,15 +122,11 @@ test('subscriptions - register publishers before startup', async () => {
   await manager.stop();
 });
 
-test('subscriptions - prepare stream without subscribers', async () => {
+test('subscriptions - idle managing server skips JetStream', async () => {
   const { manager, transport } = createManager();
-  let prepared = false;
-  transport.ensureStream = async () => {
-    prepared = true;
-    return true;
-  };
+  transport.ensureStream = () => assert.fail('Unexpected JetStream access');
   await manager.start();
-  assert.strictEqual(prepared, true);
+  assert.strictEqual(manager.retryTimer, null);
   assert.strictEqual(manager.active.size, 0);
   await manager.stop();
 });
@@ -169,7 +165,7 @@ test('subscriptions - wait for stream before binding consumers', async () => {
 
 test('subscriptions - propagate stream failure before binding', async () => {
   const { manager, transport, calls } = createManager();
-  const failure = new Error('Cannot create stream');
+  const failure = new Error('Cannot read stream');
   transport.ensureStream = async () => {
     throw failure;
   };

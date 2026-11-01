@@ -1,9 +1,9 @@
 # Application events
 
 Events use PostgreSQL outbox → Debezium → NATS JetStream → subscribers.
-Impress writes outbox records, creates the missing JetStream stream and
-consumes messages. The application owns its database migrations and Debezium
-deployment.
+Impress writes outbox records, manages durable consumers and consumes messages.
+The application owns its database migrations, Debezium deployment and event
+stream configuration.
 Tasks and cron also use NATS JetStream, in a separate stream; see [TASKS.md](TASKS.md).
 
 ## Declaring and publishing
@@ -117,18 +117,16 @@ are application infrastructure and are not configured by Impress.
 
 ## JetStream configuration
 
-With `server.events: true`, Impress creates the stream if it is missing before
-starting subscribers, even when no subscribers are declared. It defaults to
-`EVENTS`, captures `events.>` and uses file storage and limits retention.
-`nats.jetstream.replicas` sets the replica count, defaulting to 1 for a new
-stream. Limits retention allows independent subscribers to read the same
-events and durable consumers to resume after downtime.
+The event stream must be provisioned outside Impress, for example by an
+initialization service in the Debezium deployment. It defaults to `EVENTS`
+and must capture `events.>`. Configure storage, retention, limits and replicas
+in that deployment. Limits retention allows independent subscribers to read
+the same events and durable consumers to resume after downtime. JetStream
+must be enabled for the NATS account.
 
-For existing streams, Impress updates the replica count only when `replicas`
-is explicitly configured and `server.events: true`. Omitting `replicas`
-preserves the current count. Other stream settings and stored messages are
-preserved. Set custom storage and retention limits through infrastructure
-management. JetStream must be enabled for the NATS account.
+Impress only checks whether the stream exists; it never creates or updates
+it. `nats.jetstream.replicas` remains a default for new task streams and has
+no effect on events. See [TASKS.md](TASKS.md).
 
 The application can select another stream name and a consumer namespace:
 
@@ -142,39 +140,34 @@ The application can select another stream name and a consumer namespace:
     jetstream: {
       stream: 'EVENTS',
       consumerPrefix: 'impress',
-      replicas: 1,
     },
   },
   events: true,
 });
 ```
 
-Use `replicas: 3` for a cluster with at least three JetStream nodes. Configure
-the same replica count on all instances that manage this stream.
-
 These fields belong to `server` configuration. Set `server.events: true` on
-instances that create the stream and manage subscriber consumers. Every server
-worker in these instances can create the missing stream and consumers and
-update stream replication and consumer delivery options, independently of its
-discovery role.
+instances that manage subscriber consumers. Every server worker in these
+instances can create missing consumers and update consumer delivery options,
+independently of its discovery role.
 Replicas use the same stream and consumer names and delivery options. Workers
 with `server.events: false` only attach to matching existing consumers. If the
-stream or a consumer is missing, or the configured replication or consumer
-options await an update, they retry once per second in the background.
+stream or a consumer is missing, or consumer options await an update, they
+retry once per second in the background. Managing instances also wait for
+the stream to be provisioned. Without subscribers, no stream lookup is made.
 
 `nats.servers` is an array of addresses, including when there is only one
 server. For a comma-separated environment variable, configure it as
 `process.env.NATS_SERVERS?.split(',').map((server) => server.trim())`.
 
-The `server.events` flag controls stream creation, replication updates and
-consumer creation and updates. With `false`, server workers still consume
-using existing consumers.
+The `server.events` flag controls consumer creation and updates. With `false`,
+server workers still consume using existing consumers.
 Outbox publication and catalog discovery continue independently of this flag.
 
 NATS permissions must allow reading stream and consumer information, pulling
 messages and acknowledging them. Managing instances also need permission to
-create and update the stream and consumers. Permission, creation and update
-errors are propagated; they are not treated as missing resources.
+create and update consumers. Permission, creation and update errors are
+propagated; they are not treated as missing resources.
 
 Only server workers consume events. Regular workers and balancers can publish
 through the outbox. NATS remains the transport for RPC and event discovery.
@@ -307,8 +300,9 @@ attempt.
 ## Migration
 
 Configure the outbox, application table and CDC pipeline before switching
-publishers and subscribers. Start a server with `server.events: true` to
-create the stream and consumers before publishing events through CDC. With
+publishers and subscribers. Provision the event stream through the Debezium
+deployment, then start a server with `server.events: true` to create consumers
+before publishing events through CDC. With
 the default `deliverPolicy: 'new'`, publish after consumers have been created.
 Remove `transports` from event declarations. The old direct Core NATS
 publication and pg-boss event delivery paths have been removed.
@@ -336,7 +330,7 @@ The event subsystem lives in `lib/events/`:
 - `outbox.js` inserts records using the application's database adapter.
 - `declarations.js` loads and normalizes declarations.
 - `subscriptions.js` reconciles declarations and active handlers.
-- `transports.js` creates the missing stream and configures durable consumers.
+- `transports.js` checks the existing stream and configures durable consumers.
 - `consumer.js` pulls messages, dispatches handlers and acknowledges delivery.
 
 `lib/nats.js` owns the shared NATS connection and JetStream clients.
