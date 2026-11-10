@@ -8,8 +8,8 @@ Tasks and cron also use NATS JetStream, in a separate stream; see [TASKS.md](TAS
 
 ## Declaring and publishing
 
-Event names follow `service:version:entity:action`, for example
-`example:1:message:created`. Use letters, digits, `_` and `-` inside name
+Event names follow `service:version:eventName`, for example
+`example:1:messageCreated`. Use letters, digits, `_` and `-` inside name
 parts, with a numeric version and `:` as the separator. Subscriber names
 follow the same convention. Correct names are the developer's responsibility;
 Impress does not validate the name format or escape special characters.
@@ -23,12 +23,15 @@ Impress does not validate the name format or escape special characters.
 });
 ```
 
-The path becomes the event name `chat:1:message:created` and subject
+The path becomes the event name `chat:1:messageCreated` and subject
+`events.chat.1.messageCreated`. File and directory names preserve their case;
+camelCase is not split into separate parts. Nested directories add name parts:
+`chat.1/message/created.js` becomes `chat:1:message:created` with subject
 `events.chat.1.message.created`. A directory without a version defaults to
 version 1. All events use NATS JetStream; declarations do not select a transport.
 
 ```js
-const id = await events.emit('chat:1:message:created', { messageId: 42 });
+const id = await events.emit('chat:1:messageCreated', { messageId: 42 });
 ```
 
 Publication requires a declared event and an outbox configured through
@@ -61,8 +64,8 @@ The application creates the table through its own migrations. Impress does
 not create it at runtime. All columns are NOT NULL; `id` is the primary key.
 
 - `id` (uuid): generated event UUID.
-- `name` (text): event name, e.g. `chat:1:message:created`.
-- `subject` (text): subject, e.g. `events.chat.1.message.created`.
+- `name` (text): event name, e.g. `chat:1:messageCreated`.
+- `subject` (text): subject, e.g. `events.chat.1.messageCreated`.
 - `createdAt` (timestamptz): event creation time.
 - `payload` (jsonb): user data without another metadata envelope.
 
@@ -76,7 +79,7 @@ reject publication. Normal JSON serialization rules apply to nested values.
 Pass an adapter for an existing transaction to override the configured client:
 
 ```js
-await events.emit('chat:1:message:created', data, { transaction });
+await events.emit('chat:1:messageCreated', data, { transaction });
 ```
 
 The transaction must expose `query(text, values)` and execute the INSERT on
@@ -99,8 +102,8 @@ and JSON conversion so the message body has this shape:
 ```json
 {
   "id": "4e301daf-962c-4d62-aa47-38888c924870",
-  "name": "chat:1:message:created",
-  "subject": "events.chat.1.message.created",
+  "name": "chat:1:messageCreated",
+  "subject": "events.chat.1.messageCreated",
   "createdAt": "2026-10-31T12:00:00.000Z",
   "payload": { "messageId": 42 }
 }
@@ -219,7 +222,7 @@ unlimited delivery attempts. No `sequential` flag is needed.
 ```js
 ({
   stream: 'EVENTS',
-  subject: 'events.chat.1.message.created',
+  subject: 'events.chat.1.messageCreated',
   deliverPolicy: 'new',
   maxMessages: 5,
   maxAckPending: -1,
@@ -242,17 +245,16 @@ Without it, a new consumer uses `new`. The same declaration can include
 `startSequence` or `startTime` for the corresponding mode. For example, set
 `deliverPolicy: 'by_start_time'` and `startTime: '2026-10-31T00:00:00Z'`.
 
-The subscriber name is `feed:1:message:created`. The durable consumer name
+The subscriber name is `feed:1:messageCreated`. The durable consumer name
 joins `consumerPrefix`, `subscriberName` and `subject` with `|`. Subject
 dots become colons in this name; the actual NATS subject is unchanged:
 
 ```text
-impress|feed:1:message:created|events:chat:1:message:created
+impress|feed:1:messageCreated|events:chat:1:messageCreated
 ```
 
 Subject tokens are URI-encoded, including `*`, before joining them with `:`.
-Existing `events.chat.1.message.created` filters keep their previous durable
-names. `consumerPrefix` uses letters, digits, `_` or `-`; the default is
+`consumerPrefix` uses letters, digits, `_` or `-`; the default is
 `impress`. Prefixes and subscriber names must not contain the `|` delimiter.
 No instance or worker ID enters the name. Copies of the same subscriber share
 work; different names receive independent copies.
@@ -343,8 +345,19 @@ attempt.
 
 ## Migration
 
-Replace subscriber `event: 'chat:1:message:created'` with
-`stream: 'EVENTS'` and `subject: 'events.chat.1.message.created'`. Move the stream
+Event and subscriber names now preserve file and directory names instead of
+splitting camelCase and lowercasing them. For `chat.1/messageCreated.js`, update
+publication calls from `chat:1:message:created` to `chat:1:messageCreated` and
+subject filters from `events.chat.1.message.created` to
+`events.chat.1.messageCreated`. Update any explicit CDC routing accordingly.
+Changed subscriber names or subjects select new durable consumers; existing
+consumers and their saved positions are not migrated automatically. To preserve
+the old names, use explicit directories such as `chat.1/message/created.js` for
+the event and `feed.1/message/created.js` for its subscriber, keeping the old
+subject filter.
+
+Replace the former subscriber `event` property with
+`stream: 'EVENTS'` and `subject: 'events.chat.1.messageCreated'`. Move the stream
 name from `nats.jetstream.stream` into each subscriber. Keeping the same stream,
 subscriber name, consumer prefix and event subject preserves the existing
 durable consumer and its position.

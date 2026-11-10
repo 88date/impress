@@ -1,7 +1,7 @@
 /** @type {SubscriberDeclaration<{ payload: { messageId: number } }>} */
 ({
   stream: 'EVENTS',
-  subject: 'events.chat.1.message.created',
+  subject: 'events.chat.1.messageCreated',
   maxMessages: 5,
   maxAckPending: 50,
   retryLimit: 5,

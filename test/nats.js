@@ -1091,8 +1091,8 @@ test('lib/nats - should fail discovery without providers', async () => {
 test('lib/nats - should discover events from the selected server', async () => {
   const events = [
     {
-      name: 'chat:1:message:created',
-      subject: 'chat.1.message.created',
+      name: 'chat:1:messageCreated',
+      subject: 'chat.1.messageCreated',
       caption: 'Message created',
       description: '',
       examples: null,

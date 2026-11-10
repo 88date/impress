@@ -105,12 +105,12 @@ test('application events - consumer management ignores discovery', () => {
 test('application events - subscribers configure initial delivery', () => {
   initialize('server');
   const names = {
-    name: 'feed:1:message:created',
+    name: 'feed:1:messageCreated',
     path: 'feed/1/messageCreated',
   };
   const declaration = {
     stream: 'EVENTS',
-    subject: 'events.chat.1.message.created',
+    subject: 'events.chat.1.messageCreated',
     method: async () => {},
   };
   const transport = application.subscriptions.transport;
@@ -154,7 +154,7 @@ test('application events - forwards sandbox events.emit', async (t) => {
 
   application.createSandbox();
   const id = await application.sandbox.events.emit(
-    'chat:1:message:created',
+    'chat:1:messageCreated',
     data,
     options,
   );
@@ -162,7 +162,7 @@ test('application events - forwards sandbox events.emit', async (t) => {
   assert.strictEqual(id, 'event-1');
   assert.strictEqual(emit.mock.callCount(), 1);
   const [call] = emit.mock.calls;
-  assert.strictEqual(call.arguments[0], 'chat:1:message:created');
+  assert.strictEqual(call.arguments[0], 'chat:1:messageCreated');
   assert.strictEqual(call.arguments[1], data);
   assert.strictEqual(call.arguments[2], options);
   assert.strictEqual(call.arguments[2].transaction, transaction);
@@ -178,11 +178,11 @@ test('application events - configures outbox through sandbox', async () => {
     table: 'eventOutbox',
   });
   application.eventPublisher.registerEvent({
-    eventName: 'chat:1:message:created',
-    eventSubject: 'events.chat.1.message.created',
+    eventName: 'chat:1:messageCreated',
+    eventSubject: 'events.chat.1.messageCreated',
   });
 
-  const id = await application.sandbox.events.emit('chat:1:message:created', {
+  const id = await application.sandbox.events.emit('chat:1:messageCreated', {
     messageId: 42,
   });
 

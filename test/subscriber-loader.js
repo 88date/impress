@@ -44,7 +44,7 @@ const createLoader = (t) => {
   return { loader, manager, errors };
 };
 
-const route = 'stream: "EVENTS", subject: "events.chat.1.message.created"';
+const route = 'stream: "EVENTS", subject: "events.chat.1.messageCreated"';
 const invalidDeclarations = [
   ['null', 'Subscriber stream name expected'],
   ['({ method: async () => {} })', 'Subscriber stream name expected'],
@@ -81,10 +81,10 @@ test('subscriber loader - invalid reload preserves the handler', async (t) => {
   t.mock.method(fsp, 'readFile', async () => source);
   await loader.load();
   await manager.start();
-  const name = 'feed:1:message:created';
+  const name = 'feed:1:messageCreated';
   const contract = manager.subscribers[name];
   const { handle } = manager.active.get(name);
-  const record = { name: 'chat:1:message:created', payload: {} };
+  const record = { name: 'chat:1:messageCreated', payload: {} };
   const file = path.join(loader.path, 'feed.1', 'messageCreated.js');
 
   for (const [invalid] of invalidDeclarations) {

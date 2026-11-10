@@ -23,14 +23,14 @@ const createApplication = () => ({
 });
 
 const createEvent = () => ({
-  eventName: 'chat:1:message:created',
-  eventSubject: 'events.chat.1.message.created',
+  eventName: 'chat:1:messageCreated',
+  eventSubject: 'events.chat.1.messageCreated',
 });
 
 const createSubscriber = (options = {}) => ({
-  subscriberName: 'feed:1:message:created',
+  subscriberName: 'feed:1:messageCreated',
   stream: 'EVENTS',
-  subject: 'events.chat.1.message.created',
+  subject: 'events.chat.1.messageCreated',
   method: async () => {},
   ...options,
 });
@@ -77,12 +77,36 @@ const createManager = () => {
 
 test('subscriptions - derive names from declaration paths', () => {
   const directory = path.join(process.cwd(), 'test', 'events');
-  const file = path.join(directory, 'chat.2', 'messageCreated.js');
-  assert.deepStrictEqual(contractNames(directory, file), {
-    name: 'chat:2:message:created',
-    subject: 'chat.2.message.created',
-    path: 'chat/2/messageCreated',
-  });
+  const cases = [
+    {
+      parts: ['chat.2', 'messageCreated.js'],
+      name: 'chat:2:messageCreated',
+      subject: 'chat.2.messageCreated',
+      path: 'chat/2/messageCreated',
+    },
+    {
+      parts: ['chat', 'messageCreated.js'],
+      name: 'chat:1:messageCreated',
+      subject: 'chat.1.messageCreated',
+      path: 'chat/1/messageCreated',
+    },
+    {
+      parts: ['chat.1', 'chatRoom', 'HTTP2Ready.js'],
+      name: 'chat:1:chatRoom:HTTP2Ready',
+      subject: 'chat.1.chatRoom.HTTP2Ready',
+      path: 'chat/1/chatRoom/HTTP2Ready',
+    },
+    {
+      parts: ['chat.1', 'message', 'created.js'],
+      name: 'chat:1:message:created',
+      subject: 'chat.1.message.created',
+      path: 'chat/1/message/created',
+    },
+  ];
+  for (const { parts, ...expected } of cases) {
+    const file = path.join(directory, ...parts);
+    assert.deepStrictEqual(contractNames(directory, file), expected);
+  }
 });
 
 test('subscriptions - load event and subscriber declarations', async () => {
@@ -94,11 +118,11 @@ test('subscriptions - load event and subscriber declarations', async () => {
   await events.load();
   await subscribers.load();
 
-  const event = manager.events['chat:1:message:created'];
-  assert.strictEqual(event.eventSubject, 'events.chat.1.message.created');
+  const event = manager.events['chat:1:messageCreated'];
+  assert.strictEqual(event.eventSubject, 'events.chat.1.messageCreated');
   assert.deepStrictEqual(manager.describeEvents()[0].transports, ['nats']);
   assert.strictEqual(event.caption, 'Message created');
-  const subscriber = manager.subscribers['feed:1:message:created'];
+  const subscriber = manager.subscribers['feed:1:messageCreated'];
   assert.strictEqual(subscriber.stream, 'EVENTS');
   assert.strictEqual(subscriber.subject, event.eventSubject);
   assert.strictEqual(subscriber.maxMessages, 5);
@@ -225,7 +249,7 @@ test('subscriptions - forwards full JSON and context', async () => {
     const messages = [
       {
         id: 'event-1',
-        name: 'chat:1:message:created',
+        name: 'chat:1:messageCreated',
         createdAt: '2026-10-31T00:00:00.000Z',
         payload: null,
       },
@@ -300,11 +324,11 @@ test('subscriptions - isolate conflicts during reload', async (t) => {
   t.after(() => manager.stop());
   const first = createSubscriber({ deliverPolicy: 'new' });
   const second = createSubscriber({
-    subscriberName: 'audit:1:message:created',
+    subscriberName: 'audit:1:messageCreated',
     method: () => 'old',
   });
   const third = createSubscriber({
-    subscriberName: 'search:1:message:created',
+    subscriberName: 'search:1:messageCreated',
     method: () => 'new',
   });
   const conflict = new Error('Conflicting JetStream consumer');
@@ -358,7 +382,7 @@ test('subscriptions - isolate failed removals', async (t) => {
   const { manager, transport } = createManager();
   const first = createSubscriber();
   const second = createSubscriber({
-    subscriberName: 'audit:1:message:created',
+    subscriberName: 'audit:1:messageCreated',
   });
   await manager.registerSubscriber(first);
   await manager.registerSubscriber(second);
@@ -431,10 +455,10 @@ test('subscriptions - clean up bindings after startup failures', async () => {
   const { manager, transport, calls } = createManager();
   const first = createSubscriber();
   const second = createSubscriber({
-    subscriberName: 'audit:1:message:created',
+    subscriberName: 'audit:1:messageCreated',
   });
   const third = createSubscriber({
-    subscriberName: 'search:1:message:created',
+    subscriberName: 'search:1:messageCreated',
   });
   const failures = new Map([
     [first.subscriberName, new Error('First consumer unavailable')],
@@ -491,10 +515,10 @@ test('event loaders - keep contracts after invalid reload', async (t) => {
   const loader = new EventLoader(createApplication(), manager);
   const file = path.join(loader.path, 'chat.1', 'messageCreated.js');
   await loader.change(file);
-  const original = manager.events['chat:1:message:created'];
+  const original = manager.events['chat:1:messageCreated'];
   t.mock.method(fsp, 'readFile', async () => '({');
   await loader.change(file);
-  assert.strictEqual(manager.events['chat:1:message:created'], original);
+  assert.strictEqual(manager.events['chat:1:messageCreated'], original);
 });
 
 test('event loaders - reject an invalid initial snapshot', async (t) => {

@@ -58,10 +58,10 @@ test(
     await pool.query(`CREATE TABLE ${business} ("id" integer PRIMARY KEY)`);
     const publisher = new EventPublisher();
     publisher.configure({ database: pool, schema, table });
-    const eventName = 'chat:1:message:created';
+    const eventName = 'chat:1:messageCreated';
     publisher.registerEvent({
       eventName,
-      eventSubject: 'events.chat.1.message.created',
+      eventSubject: 'events.chat.1.messageCreated',
     });
     const readOutbox = async () => {
       const { rows } = await pool.query(`SELECT * FROM ${target}`);
@@ -77,7 +77,7 @@ test(
     assert.strictEqual(initial.length, 1);
     assert.strictEqual(initial[0].id, id);
     assert.strictEqual(initial[0].name, eventName);
-    assert.strictEqual(initial[0].subject, 'events.chat.1.message.created');
+    assert.strictEqual(initial[0].subject, 'events.chat.1.messageCreated');
     assert.ok(initial[0].createdAt instanceof Date);
     assert.deepStrictEqual(initial[0].payload, { messageId: 42 });
 

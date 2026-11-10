@@ -6,8 +6,8 @@ const { Outbox } = require('../lib/events/outbox.js');
 
 const event = {
   id: '40484806-997c-43bc-8000-5ba599aa7aa4',
-  name: 'chat:1:message:created',
-  subject: 'events.chat.1.message.created',
+  name: 'chat:1:messageCreated',
+  subject: 'events.chat.1.messageCreated',
   createdAt: '2026-10-31T12:00:00.000Z',
   payload: { messageId: 42 },
 };

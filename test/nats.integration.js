@@ -80,7 +80,7 @@ test(
     streamCreated = true;
     const transport = new JetStreamSubscriptions(nats, console, true);
     const binding = transport.createBinding({
-      subscriberName: 'audit:1:message:completed',
+      subscriberName: 'audit:1:messageCompleted',
       stream,
       subject,
     });
@@ -156,7 +156,7 @@ test(
       await manager.streams.add({ name: route.stream, subjects: [subject] });
       created.push(route.stream);
       await subscriptions.registerSubscriber({
-        subscriberName: `${route.stream}:1:message:created`,
+        subscriberName: `${route.stream}:1:messageCreated`,
         stream: route.stream,
         subject,
         method: (message, context) => {
@@ -246,8 +246,8 @@ test(
     const application = createApplication('server');
     const suffix = randomBytes(8).toString('hex');
     const stream = `EVENTS_TEST_${suffix}`;
-    const eventName = `integration${suffix}:1:message:completed`;
-    const subject = `impress_test.${suffix}.events.message.completed`;
+    const eventName = `integration${suffix}:1:messageCompleted`;
+    const subject = `impress_test.${suffix}.events.messageCompleted`;
     const nats = new Nats(application);
     application.nats = nats;
     let subscriptions = null;
@@ -298,7 +298,7 @@ test(
       eventSubject: subject,
     });
     await subscriptions.registerSubscriber({
-      subscriberName: 'audit:1:message:completed',
+      subscriberName: 'audit:1:messageCompleted',
       stream,
       subject,
       retryDelay: 10,

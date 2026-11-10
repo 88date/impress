@@ -224,8 +224,8 @@ test('lib/catalog - event catalog should share discovery loader', () => {
       caption: 'Profile created',
     },
     {
-      name: 'chat:1:message:created',
-      subject: 'chat.1.message.created',
+      name: 'chat:1:messageCreated',
+      subject: 'chat.1.messageCreated',
       caption: 'Message created',
     },
   ];

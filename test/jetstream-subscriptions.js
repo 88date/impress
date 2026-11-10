@@ -15,15 +15,15 @@ const createTransport = (managesTopology = true, jetstream = {}) => {
 };
 
 const createContract = (options = {}) => ({
-  subscriberName: 'feed:1:message:created',
+  subscriberName: 'feed:1:messageCreated',
   stream: 'EVENTS',
-  subject: 'events.chat.1.message.created',
+  subject: 'events.chat.1.messageCreated',
   ...options,
 });
 
 const createRecord = () => ({
   id: 'event-1',
-  name: 'chat:1:message:created',
+  name: 'chat:1:messageCreated',
   createdAt: '2026-10-31T00:00:00.000Z',
   payload: { messageId: 42 },
 });
@@ -53,23 +53,23 @@ test('JetStream - instances share readable durable names', () => {
     createContract({ maxMessages: 10 }),
   );
   const other = transport.createBinding(
-    createContract({ subscriberName: 'audit:1:message:created' }),
+    createContract({ subscriberName: 'audit:1:messageCreated' }),
   );
   const moved = transport.createBinding(
-    createContract({ subject: 'events.chat.1.message.updated' }),
+    createContract({ subject: 'events.chat.1.messageUpdated' }),
   );
   const prefixed = createTransport(true, { consumerPrefix: 'backend' });
   const separate = prefixed.createBinding(createContract());
   assert.strictEqual(
     first.consumerName,
-    'impress|feed:1:message:created|events:chat:1:message:created',
+    'impress|feed:1:messageCreated|events:chat:1:messageCreated',
   );
   assert.strictEqual(first.options.durable_name, first.consumerName);
   assert.strictEqual(first.consumerName, same.consumerName);
   assert.notStrictEqual(first.consumerName, other.consumerName);
   assert.notStrictEqual(first.consumerName, moved.consumerName);
   assert.notStrictEqual(first.consumerName, separate.consumerName);
-  assert.strictEqual(first.subject, 'events.chat.1.message.created');
+  assert.strictEqual(first.subject, 'events.chat.1.messageCreated');
   assert.strictEqual(first.stream, 'EVENTS');
 });
 
