@@ -85,7 +85,12 @@ test('subscriber loader - invalid reload preserves the handler', async (t) => {
   const contract = manager.subscribers[name];
   const { handle } = manager.active.get(name);
   const record = { name: 'chat:1:messageCreated', payload: {} };
-  const file = path.join(loader.path, 'feed.1', 'messageCreated.js');
+  const file = path.join(
+    loader.path,
+    'feed',
+    'subscribers',
+    'messageCreated.js',
+  );
 
   for (const [invalid] of invalidDeclarations) {
     source = invalid;

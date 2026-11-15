@@ -8,13 +8,13 @@ Tasks and cron also use NATS JetStream, in a separate stream; see [TASKS.md](TAS
 
 ## Declaring and publishing
 
-Event names follow `service:version:eventName`, for example
+Event names follow `module:version:eventName`, for example
 `example:1:messageCreated`. Use letters, digits, `_` and `-` inside name
-parts, with a numeric version and `:` as the separator. Subscriber names
-follow the same convention. Correct names are the developer's responsibility;
-Impress does not validate the name format or escape special characters.
+parts, with a positive integer version and `:` as the separator. Subscriber
+names follow the same convention. Correct name parts are the developer's
+responsibility; Impress does not escape special characters.
 
-`application/events/chat.1/messageCreated.js`:
+`application/modules/chat/events/messageCreated.js`:
 
 ```js
 ({
@@ -24,11 +24,24 @@ Impress does not validate the name format or escape special characters.
 ```
 
 The path becomes the event name `chat:1:messageCreated` and subject
-`events.chat.1.messageCreated`. File and directory names preserve their case;
-camelCase is not split into separate parts. Nested directories add name parts:
-`chat.1/message/created.js` becomes `chat:1:message:created` with subject
-`events.chat.1.message.created`. A directory without a version defaults to
-version 1. All events use NATS JetStream; declarations do not select a transport.
+`events.chat.1.messageCreated`. The module directory supplies the namespace.
+An optional version suffix before `.js` supplies the version:
+`messageCreated.2.js` declares `chat:2:messageCreated` with subject
+`events.chat.2.messageCreated`. Without a suffix, the version is `1`.
+`messageCreated.js` and `messageCreated.1.js` declare the same event and cannot
+coexist; duplicate declarations fail loading. Different versions can coexist
+and are published by their complete event names.
+
+File and directory names preserve their case; camelCase is not split into
+separate parts. Nested directories add name parts:
+`modules/chat/events/message/created.2.js` becomes `chat:2:message:created`
+with subject `events.chat.2.message.created`. All events use NATS JetStream;
+declarations do not select a transport.
+
+Event and subscriber declarations use the shared application sandbox. Their
+location inside a module does not provide an `internal` namespace. The
+`events` and `subscribers` directories directly inside each module are
+reserved for declarations and are excluded from its ordinary code tree.
 
 ```js
 const id = await events.emit('chat:1:messageCreated', { messageId: 42 });
@@ -217,7 +230,7 @@ unlimited delivery attempts. No `sequential` flag is needed.
 
 ## Subscribers
 
-`application/subscribers/feed.1/messageCreated.js`:
+`application/modules/feed/subscribers/messageCreated.js`:
 
 ```js
 ({
@@ -245,7 +258,15 @@ Without it, a new consumer uses `new`. The same declaration can include
 `startSequence` or `startTime` for the corresponding mode. For example, set
 `deliverPolicy: 'by_start_time'` and `startTime: '2026-10-31T00:00:00Z'`.
 
-The subscriber name is `feed:1:messageCreated`. The durable consumer name
+The subscriber name is `feed:1:messageCreated`. A filename such as
+`messageCreated.2.js` declares `feed:2:messageCreated`; an omitted suffix
+defaults to version `1`. Subscriber versions are independent of event versions:
+the declaration's `subject` chooses which events to consume. Changing the
+subscriber version selects a different durable consumer, so ordinary handler
+code changes do not require a new version. The same duplicate-name rule applies
+to unversioned and explicit version `1` subscriber files.
+
+The durable consumer name
 joins `consumerPrefix`, `subscriberName` and `subject` with `|`. Subject
 dots become colons in this name; the actual NATS subject is unchanged:
 
@@ -345,16 +366,35 @@ attempt.
 
 ## Migration
 
+Move declarations from the top-level `application/events` and
+`application/subscribers` directories into their owning modules. The old
+directories are no longer loaded. For example:
+
+| Previous path                          | New path                                       |
+| -------------------------------------- | ---------------------------------------------- |
+| `events/chat.1/messageCreated.js`      | `modules/chat/events/messageCreated.js`        |
+| `events/chat.2/messageCreated.js`      | `modules/chat/events/messageCreated.2.js`      |
+| `subscribers/feed.1/messageCreated.js` | `modules/feed/subscribers/messageCreated.js`   |
+| `subscribers/feed.2/messageCreated.js` | `modules/feed/subscribers/messageCreated.2.js` |
+
+All paths in this table are relative to `application/`. These moves preserve
+event names, subjects and subscriber names. Keep the subscriber's stream,
+subject and consumer prefix unchanged to retain its durable consumer and saved
+position. Move version numbers from the former namespace directories to the
+filenames; do not keep module names such as `chat.2`.
+
 Event and subscriber names now preserve file and directory names instead of
-splitting camelCase and lowercasing them. For `chat.1/messageCreated.js`, update
-publication calls from `chat:1:message:created` to `chat:1:messageCreated` and
-subject filters from `events.chat.1.message.created` to
+splitting camelCase and lowercasing them. When migrating older names to
+`modules/chat/events/messageCreated.js`, update publication calls from
+`chat:1:message:created` to `chat:1:messageCreated` and subject filters from
+`events.chat.1.message.created` to
 `events.chat.1.messageCreated`. Update any explicit CDC routing accordingly.
 Changed subscriber names or subjects select new durable consumers; existing
 consumers and their saved positions are not migrated automatically. To preserve
-the old names, use explicit directories such as `chat.1/message/created.js` for
-the event and `feed.1/message/created.js` for its subscriber, keeping the old
-subject filter.
+the old names, use explicit directories such as
+`modules/chat/events/message/created.js` for the event and
+`modules/feed/subscribers/message/created.js` for its subscriber, keeping the
+old subject filter.
 
 Replace the former subscriber `event` property with
 `stream: 'EVENTS'` and `subject: 'events.chat.1.messageCreated'`. Move the stream

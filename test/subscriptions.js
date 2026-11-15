@@ -76,31 +76,37 @@ const createManager = () => {
 };
 
 test('subscriptions - derive names from declaration paths', () => {
-  const directory = path.join(process.cwd(), 'test', 'events');
+  const directory = path.join(process.cwd(), 'test', 'modules');
   const cases = [
     {
-      parts: ['chat.2', 'messageCreated.js'],
+      parts: ['chat', 'events', 'messageCreated.2.js'],
       name: 'chat:2:messageCreated',
       subject: 'chat.2.messageCreated',
       path: 'chat/2/messageCreated',
     },
     {
-      parts: ['chat', 'messageCreated.js'],
+      parts: ['chat', 'events', 'messageCreated.js'],
       name: 'chat:1:messageCreated',
       subject: 'chat.1.messageCreated',
       path: 'chat/1/messageCreated',
     },
     {
-      parts: ['chat.1', 'chatRoom', 'HTTP2Ready.js'],
+      parts: ['chat', 'events', 'chatRoom', 'HTTP2Ready.1.js'],
       name: 'chat:1:chatRoom:HTTP2Ready',
       subject: 'chat.1.chatRoom.HTTP2Ready',
       path: 'chat/1/chatRoom/HTTP2Ready',
     },
     {
-      parts: ['chat.1', 'message', 'created.js'],
+      parts: ['chat', 'events', 'message', 'created.js'],
       name: 'chat:1:message:created',
       subject: 'chat.1.message.created',
       path: 'chat/1/message/created',
+    },
+    {
+      parts: ['feed', 'subscribers', 'message', 'created.2.js'],
+      name: 'feed:2:message:created',
+      subject: 'feed.2.message.created',
+      path: 'feed/2/message/created',
     },
   ];
   for (const { parts, ...expected } of cases) {
@@ -132,9 +138,11 @@ test('subscriptions - load event and subscriber declarations', async () => {
   assert.strictEqual(subscriber.timeout, 30000);
 
   await subscribers.delete(
-    path.join(subscribers.path, 'feed.1', 'messageCreated.js'),
+    path.join(subscribers.path, 'feed', 'subscribers', 'messageCreated.js'),
   );
-  await events.delete(path.join(events.path, 'chat.1', 'messageCreated.js'));
+  await events.delete(
+    path.join(events.path, 'chat', 'events', 'messageCreated.js'),
+  );
   assert.deepStrictEqual(Object.keys(manager.subscribers), []);
   assert.deepStrictEqual(Object.keys(manager.events), []);
 });
@@ -513,7 +521,7 @@ test('subscriptions - retain handles when stopping fails', async () => {
 test('event loaders - keep contracts after invalid reload', async (t) => {
   const { manager } = createManager();
   const loader = new EventLoader(createApplication(), manager);
-  const file = path.join(loader.path, 'chat.1', 'messageCreated.js');
+  const file = path.join(loader.path, 'chat', 'events', 'messageCreated.js');
   await loader.change(file);
   const original = manager.events['chat:1:messageCreated'];
   t.mock.method(fsp, 'readFile', async () => '({');
@@ -527,4 +535,58 @@ test('event loaders - reject an invalid initial snapshot', async (t) => {
   t.mock.method(fsp, 'readFile', async () => '({');
   await assert.rejects(loader.load(), /Cannot load declaration/);
   assert.deepStrictEqual(calls, []);
+});
+
+test('event loaders - deletion preserves newer declarations', async (t) => {
+  const { manager } = createManager();
+  const loader = new EventLoader(createApplication(), manager);
+  const modulePath = path.join(loader.path, 'chat');
+  const file = path.join(modulePath, 'events', 'messageCreated.js');
+  await loader.load();
+  const entered = Promise.withResolvers();
+  const released = Promise.withResolvers();
+  const unregister = loader.unregister.bind(loader);
+  t.mock.method(loader, 'unregister', async (name) => {
+    await unregister(name);
+    entered.resolve();
+    await released.promise;
+  });
+
+  const deleting = loader.delete(modulePath);
+  await entered.promise;
+  try {
+    await loader.change(file);
+  } finally {
+    released.resolve();
+    await deleting;
+  }
+
+  assert.strictEqual(
+    manager.events['chat:1:messageCreated'].eventSubject,
+    'events.chat.1.messageCreated',
+  );
+});
+
+test('event loaders - deletion invalidates pending reads', async (t) => {
+  const { manager } = createManager();
+  const loader = new EventLoader(createApplication(), manager);
+  const modulePath = path.join(loader.path, 'chat');
+  const file = path.join(modulePath, 'events', 'messageCreated.js');
+  const entered = Promise.withResolvers();
+  const released = Promise.withResolvers();
+  t.mock.method(fsp, 'readFile', () => {
+    entered.resolve();
+    return released.promise;
+  });
+
+  const reading = loader.change(file);
+  await entered.promise;
+  try {
+    await loader.delete(modulePath);
+  } finally {
+    released.resolve('({ caption: "Deleted" })');
+    await reading;
+  }
+
+  assert.deepStrictEqual(Object.keys(manager.events), []);
 });
