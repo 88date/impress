@@ -91,8 +91,9 @@ method is unavailable, the call fails without falling back to another version.
 
 ## Application events
 
-Declare events in `application/events`, declare their handlers in
-`application/subscribers`, and publish through `events.emit(name, data)`.
+Declare events in `application/modules/<module>/events` and their handlers
+in `application/modules/<module>/subscribers`. Publish one event with
+`events.emit(name, payload)` or a batch with `events.emitBulk(events)`.
 See [event delivery, configuration, and migration](EVENTS.md).
 
 RPC services expose actions only. Event publication and subscriptions use

@@ -191,6 +191,49 @@ test('application events - configures outbox through sandbox', async () => {
   assert.strictEqual(calls[0][1][0], id);
 });
 
+test('application events - inserts a batch on its transaction', async (t) => {
+  initialize();
+  application.createSandbox();
+  const { events } = application.sandbox;
+  events.configure({
+    database: { query: () => assert.fail('Query escaped its transaction') },
+  });
+  const created = 'chat:1:messageCreated';
+  const deleted = 'chat:1:messageDeleted';
+  for (const name of [created, deleted]) {
+    application.eventPublisher.registerEvent({
+      eventName: name,
+      eventSubject: 'events.' + name.replaceAll(':', '.'),
+    });
+  }
+  const first = { name: created, payload: { messageId: 42 } };
+  const batch = [first, { name: deleted, payload: null }, first];
+  const query = t.mock.fn(async () => {});
+
+  const ids = await events.emitBulk(batch, { transaction: { query } });
+
+  assert.strictEqual(query.mock.callCount(), 1);
+  const [sql, values] = query.mock.calls[0].arguments;
+  assert.ok(sql.startsWith('INSERT INTO "public"."outbox"'));
+  assert.strictEqual(ids.length, batch.length);
+  assert.strictEqual(new Set(ids).size, ids.length);
+  for (const id of ids) assert.match(id, /^[0-9a-f-]{36}$/);
+  assert.deepStrictEqual(values[0], ids);
+  assert.deepStrictEqual(values[1], [created, deleted, created]);
+  assert.deepStrictEqual(values[2], [
+    'events.chat.1.messageCreated',
+    'events.chat.1.messageDeleted',
+    'events.chat.1.messageCreated',
+  ]);
+  for (const time of values[3]) {
+    assert.strictEqual(new Date(time).toISOString(), time);
+  }
+  assert.deepStrictEqual(
+    values[4],
+    batch.map(({ payload }) => JSON.stringify(payload)),
+  );
+});
+
 test('application events - follows lifecycle order', async (t) => {
   initialize();
   application.mode = 'prod';

@@ -48,9 +48,24 @@ const id = await events.emit('chat:1:messageCreated', { messageId: 42 });
 ```
 
 Publication requires a declared event and an outbox configured through
-`events.configure()`. It always writes to the outbox and returns the generated
-ID after the INSERT succeeds. There is no direct NATS or pg-boss publication.
+`events.configure()`. `events.emit` returns the generated ID after the outbox
+INSERT succeeds. There is no direct NATS or pg-boss publication.
 The publisher does not need an active connection to either broker.
+
+Use `events.emitBulk` to publish several events with one outbox INSERT.
+
+```js
+const ids = await events.emitBulk([
+  { name: 'chat:1:messageCreated', payload: { messageId: 42 } },
+  { name: 'chat:1:messageCreated', payload: { messageId: 43 } },
+]);
+```
+
+A batch can include different declared event names. Each entry gets its own
+outbox row and UUID. The returned IDs follow the input order, and subscribers
+receive individual events. An empty array returns `[]` without querying the
+database. An unknown name, an unserializable payload or a database error
+rejects the whole batch.
 
 ## PostgreSQL outbox
 
@@ -93,12 +108,13 @@ Pass an adapter for an existing transaction to override the configured client:
 
 ```js
 await events.emit('chat:1:messageCreated', data, { transaction });
+await events.emitBulk(batch, { transaction });
 ```
 
 The transaction must expose `query(text, values)` and execute the INSERT on
 the connection used for the business changes. Impress does not begin, commit
-or roll back transactions. With a supplied transaction, the returned ID does
-not mean that the transaction has committed.
+or roll back transactions. With a supplied transaction, the returned IDs
+become visible to other connections after commit.
 
 Without an explicit transaction, the configured adapter executes the INSERT,
 normally using autocommit. An adapter backed by `AsyncLocalStorage`, such as

@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Add `events.emitBulk` to publish a batch in one PostgreSQL outbox insert
+
 ## [3.1.1][] - 2025-09-21
 
 - Fix TypeError: domain.enter is not a function

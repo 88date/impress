@@ -147,5 +147,29 @@ test(
       );
       assert.strictEqual(rows[0].payload, payload);
     }
+
+    await t.test('bulk commit and atomic rejection', async () => {
+      const initialCount = (await readOutbox()).length;
+      const payloads = [null, ['quoted "text"', null], 'null', { id: 42 }];
+      const batch = payloads.map((payload) => ({ name: eventName, payload }));
+      let ids;
+      await withTransaction(pool, async (transaction) => {
+        ids = await publisher.emitBulk(batch, { transaction });
+        assert.strictEqual((await readOutbox()).length, initialCount);
+      });
+      const rows = await readOutbox();
+      assert.strictEqual(rows.length, initialCount + batch.length);
+      assert.deepStrictEqual(
+        ids.map((id) => rows.find((row) => row.id === id).payload),
+        payloads,
+      );
+
+      const rejected = { name: eventName, payload: { reject: true } };
+      await assert.rejects(
+        publisher.emitBulk([...batch, rejected]),
+        /validPayload/,
+      );
+      assert.strictEqual((await readOutbox()).length, rows.length);
+    });
   },
 );

@@ -114,9 +114,14 @@ declare global {
     configure(options: EventConfiguration): void;
     emit(
       name: string,
-      data: unknown,
+      payload: unknown,
       options?: EventEmitOptions,
     ): Promise<string>;
+    /** Insert the batch atomically and return outbox IDs in input order. */
+    emitBulk(
+      events: readonly { name: string; payload: unknown }[],
+      options?: EventEmitOptions,
+    ): Promise<string[]>;
   }
 
   interface TaskJob<Data = Record<string, unknown>> {

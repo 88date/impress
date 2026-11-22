@@ -58,6 +58,26 @@ test('event-publisher - rejects unknown and removed events', async () => {
   assert.strictEqual(calls.length, 1);
 });
 
+test('event-publisher - validates the batch before writing', async (t) => {
+  const events = new EventPublisher();
+  assert.deepStrictEqual(await events.emitBulk([]), []);
+  registerEvent(events);
+  const valid = { name: eventName, payload: null };
+  await assert.rejects(events.emitBulk([valid]), /outbox is not configured/);
+
+  const query = t.mock.fn(async () => {});
+  events.configure({ database: { query } });
+  await assert.rejects(
+    events.emitBulk([valid, { name: 'chat:1:unknown', payload: null }]),
+    /Unknown event: chat:1:unknown/,
+  );
+  await assert.rejects(
+    events.emitBulk([valid, { name: eventName, payload: undefined }]),
+    /Outbox payload must be JSON-serializable/,
+  );
+  assert.strictEqual(query.mock.callCount(), 0);
+});
+
 test('event-publisher - prefers an explicit transaction', async () => {
   const events = new EventPublisher();
   events.configure({
@@ -116,6 +136,10 @@ test('event-publisher - propagates a database failure', async () => {
 
   await assert.rejects(
     events.emit(eventName, {}),
+    (error) => error === failure,
+  );
+  await assert.rejects(
+    events.emitBulk([{ name: eventName, payload: {} }]),
     (error) => error === failure,
   );
 });
